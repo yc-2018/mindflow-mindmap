@@ -1,0 +1,33 @@
+{
+	"name": "mindflow",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "tsc -b && vite build",
+		"preview": "vite preview",
+		"deploy": "npm run build && wrangler deploy",
+		"typecheck": "tsc -b --noEmit"
+	},
+	"dependencies": {
+		"@xyflow/react": "^12.12.0",
+		"lucide-react": "^1.61.0",
+		"react": "^19.3.1",
+		"react-dom": "^19.3.1",
+		"react-markdown": "^10.1.0",
+		"remark-breaks": "^4.0.0",
+		"remark-gfm": "^4.0.1"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^5.20261026.1",
+		"@types/react": "^19.3.0",
+		"@types/react-dom": "^19.3.0",
+		"@vitejs/plugin-react": "^6.1.2",
+		"html-to-image": "^1.11.13",
+		"puppeteer-core": "^25.16.0",
+		"typescript": "^5.9.3",
+		"vite": "^8.3.5",
+		"vite-node": "^6.0.0"
+	}
+}
