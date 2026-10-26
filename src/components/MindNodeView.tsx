@@ -5,6 +5,7 @@ import { MAX_IMAGES, type MindNode } from '../lib/types';
 import { HANDLE } from '../lib/handles';
 import { useTheme } from '../lib/themeContext';
 import MarkdownLabel from './MarkdownLabel';
+import FormatBar, { wrapSelection, type FormatKind } from './FormatBar';
 
 /** Window event the editor listens to when a node's "+" button is pressed. */
 export const ADD_CHILD_EVENT = 'mindflow:add-child';
@@ -16,13 +17,16 @@ export const ADD_IMAGE_EVENT = 'mindflow:add-image';
 export const REMOVE_IMAGE_EVENT = 'mindflow:remove-image';
 /** Window event fired when a node's collapse toggle is pressed. */
 export const TOGGLE_COLLAPSE_EVENT = 'mindflow:toggle-collapse';
+/** Window event fired when in-place editing commits (so the editor can relayout). */
+export const LABEL_COMMIT_EVENT = 'mindflow:label-commit';
 
 /**
  * Mind-map node: label on its own row at the top, then a row of small image
  * thumbnails underneath.
  *
  * Editing happens IN PLACE: double-click swaps the label for a textarea of the
- * same size, no floating dialog.
+ * same size, no floating dialog. Selecting text inside the editor pops a format
+ * bar that writes Markdown/HTML into the stored label.
  *
  * The trailing button is context aware:
  *  - a node with children shows "−" to collapse, "＋" when collapsed
@@ -40,6 +44,7 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const [draft, setDraft] = useState(data.label);
+	const [format, setFormat] = useState<{ x: number; y: number; start: number; end: number } | null>(null);
 	const { updateNodeData } = useReactFlow();
 	const theme = useTheme();
 
@@ -47,6 +52,7 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 	useEffect(() => {
 		if (editing) {
 			setDraft(data.label);
+			setFormat(null);
 			requestAnimationFrame(() => {
 				const el = inputRef.current;
 				if (!el) return;
@@ -58,9 +64,71 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 		}
 	}, [editing, data.label]);
 
+	/**
+	 * Show the format bar whenever there is a non-empty selection.
+	 *
+	 * `onSelect` does not fire for programmatic selection changes (and some
+	 * browsers skip it for keyboard selection), so we also poll while the node is
+	 * in edit mode. The poll is cheap and stops as soon as editing ends.
+	 */
+	const updateFormatBar = () => {
+		const el = inputRef.current;
+		if (!el) return;
+		const { selectionStart: start, selectionEnd: end } = el;
+		if (start === end) {
+			setFormat(null);
+			return;
+		}
+		const rect = el.getBoundingClientRect();
+		setFormat({
+			x: rect.x + rect.width / 2,
+			y: rect.y + 4,
+			start,
+			end,
+		});
+	};
+
+	// poll the textarea selection while editing so the bar tracks it reliably
+	useEffect(() => {
+		if (!editing) return;
+		const id = window.setInterval(() => {
+			const el = inputRef.current;
+			if (!el) return;
+			if (document.activeElement !== el) return;
+			const { selectionStart: start, selectionEnd: end } = el;
+			setFormat((prev) => {
+				if (start === end) return prev === null ? prev : null;
+				if (prev && prev.start === start && prev.end === end) return prev;
+				const rect = el.getBoundingClientRect();
+				return { x: rect.x + rect.width / 2, y: rect.y + 4, start, end };
+			});
+		}, 220);
+		return () => window.clearInterval(id);
+	}, [editing]);
+
+	const applyFormat = (kind: FormatKind) => {
+		const el = inputRef.current;
+		if (!el || !format) return;
+		const result = wrapSelection(draft, format.start, format.end, kind);
+		setDraft(result.text);
+		// restore the selection after React re-renders the value
+		requestAnimationFrame(() => {
+			const node = inputRef.current;
+			if (!node) return;
+			node.focus();
+			node.setSelectionRange(result.start, result.end);
+			node.style.height = 'auto';
+			node.style.height = `${node.scrollHeight}px`;
+			updateFormatBar();
+		});
+	};
+
 	const commit = () => {
+		setFormat(null);
 		const clean = draft.trim();
-		updateNodeData(id, { label: clean || data.label, editing: false });
+		const next = clean || data.label;
+		updateNodeData(id, { label: next, editing: false });
+		window.dispatchEvent(new CustomEvent(LABEL_COMMIT_EVENT, { detail: { id } }));
 	};
 
 	const canAddMore = images.length + pending < MAX_IMAGES;
@@ -106,6 +174,19 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 				id={HANDLE.targetRight}
 				className="mind-handle mind-handle--tgt-right"
 			/>
+			{/* vertical pair, used by the top-down / bottom-up structures */}
+			<Handle
+				type="source"
+				position={Position.Bottom}
+				id={HANDLE.sourceBottom}
+				className="mind-handle mind-handle--vertical"
+			/>
+			<Handle
+				type="target"
+				position={Position.Top}
+				id={HANDLE.targetTop}
+				className="mind-handle mind-handle--vertical"
+			/>
 
 			{editing ? (
 				<div className="mind-node__label nodrag nopan">
@@ -119,16 +200,40 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 							e.target.style.height = 'auto';
 							e.target.style.height = `${e.target.scrollHeight}px`;
 						}}
+						onSelect={updateFormatBar}
+						onKeyUp={updateFormatBar}
+						onMouseUp={updateFormatBar}
 						onBlur={commit}
 						onKeyDown={(e) => {
 							e.stopPropagation();
 							if (e.key === 'Enter' && !e.shiftKey) {
 								e.preventDefault();
 								commit();
+								return;
 							}
-							if (e.key === 'Escape') updateNodeData(id, { editing: false });
+							if (e.key === 'Escape') {
+								setFormat(null);
+								updateNodeData(id, { editing: false });
+								return;
+							}
+							// formatting shortcuts
+							if (e.ctrlKey || e.metaKey) {
+								const k = e.key.toLowerCase();
+								if (k === 'b' || k === 'i' || k === 'u') {
+									e.preventDefault();
+									updateFormatBar();
+									if (format) applyFormat(k === 'b' ? 'bold' : k === 'i' ? 'italic' : 'underline');
+								}
+							}
 						}}
 					/>
+					{format ? (
+						<FormatBar
+							anchor={{ x: format.x, y: format.y }}
+							selection={{ start: format.start, end: format.end }}
+							onApply={(kind) => applyFormat(kind)}
+						/>
+					) : null}
 				</div>
 			) : (
 				<div className="mind-node__label">

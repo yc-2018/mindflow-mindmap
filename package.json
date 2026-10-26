@@ -17,8 +17,10 @@
 		"react": "^19.3.1",
 		"react-dom": "^19.3.1",
 		"react-markdown": "^10.1.0",
+		"rehype-raw": "^7.0.0",
 		"remark-breaks": "^4.0.0",
-		"remark-gfm": "^4.0.1"
+		"remark-gfm": "^4.0.1",
+		"unist-util-visit": "^5.2.0"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^5.20261026.1",

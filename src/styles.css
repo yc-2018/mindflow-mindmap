@@ -1031,6 +1031,9 @@ select {
 }
 
 /* in-place rename: same box as the label, no floating dialog */
+.mind-node__label {
+	position: relative;
+}
 .mind-node__input {
 	width: 100%;
 	border: none;
@@ -1044,6 +1047,224 @@ select {
 	resize: none;
 	overflow: hidden;
 	word-break: break-word;
+}
+
+/* ---------- floating format bar ---------- */
+
+.format-bar {
+	position: fixed;
+	z-index: 400;
+	display: flex;
+	align-items: center;
+	gap: 1px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	padding: 3px;
+	box-shadow: var(--shadow-lg);
+	animation: pop 0.12s ease;
+}
+.format-bar__btn {
+	width: 27px;
+	height: 27px;
+	padding: 0;
+	border-radius: 6px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-dim);
+	transition: background 0.12s ease, color 0.12s ease;
+}
+.format-bar__btn:hover:not(:disabled) {
+	background: #eef0f6;
+	color: var(--text);
+}
+.format-bar__btn:disabled {
+	opacity: 0.34;
+	cursor: not-allowed;
+}
+.format-bar__btn.is-danger:hover {
+	background: #fff0f0;
+	color: var(--danger);
+}
+.editor.is-dark .format-bar {
+	background: #242938;
+	border-color: #333a4d;
+}
+.editor.is-dark .format-bar__btn {
+	color: #b8c0d0;
+}
+.editor.is-dark .format-bar__btn:hover:not(:disabled) {
+	background: #2f3547;
+	color: #fff;
+}
+
+/* highlighted text from ==...== */
+.md-mark {
+	background: #fef08a;
+	color: inherit;
+	border-radius: 2px;
+	padding: 0 1px;
+}
+.editor.is-dark .md-mark {
+	background: #a16207;
+	color: #fff;
+}
+.md-label u {
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
+/* ---------- structure picker ---------- */
+
+.struct-panel {
+	width: 300px;
+	max-height: 70vh;
+	overflow-y: auto;
+}
+.struct-group {
+	margin-bottom: 10px;
+}
+.struct-group:last-child {
+	margin-bottom: 0;
+}
+.struct-group__title {
+	font-size: 11px;
+	color: var(--text-mute);
+	margin: 0 0 5px 3px;
+	font-weight: 500;
+}
+.struct-grid {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 6px;
+}
+.struct-card {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 3px;
+	padding: 7px 5px 5px;
+	border-radius: 8px;
+	border: 1px solid var(--line);
+	background: #fcfcfe;
+	transition: all 0.14s ease;
+}
+.struct-card:hover {
+	border-color: var(--line-strong);
+	background: #f6f7fb;
+}
+.struct-card.is-active {
+	border-color: var(--brand);
+	background: #f4f5ff;
+}
+.struct-icon {
+	width: 100%;
+	height: 34px;
+}
+.struct-card__name {
+	font-size: 10.5px;
+	color: var(--text-dim);
+	white-space: nowrap;
+}
+.struct-card.is-active .struct-card__name {
+	color: var(--brand-dark);
+	font-weight: 550;
+}
+.struct-card__check {
+	position: absolute;
+	top: 3px;
+	right: 3px;
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	background: var(--brand);
+	color: #fff;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+/* ---------- multi-select + drop hints ---------- */
+
+.multi-bar {
+	position: absolute;
+	bottom: 62px;
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: 11px;
+	padding: 7px 12px;
+	box-shadow: var(--shadow-lg);
+	z-index: 40;
+	animation: pop 0.15s ease;
+}
+.multi-bar__count {
+	font-size: 12.5px;
+	color: var(--text-dim);
+	font-weight: 550;
+	white-space: nowrap;
+}
+.multi-bar .btn-ghost {
+	padding: 5px 11px;
+	font-size: 12.5px;
+}
+.editor.is-dark .multi-bar {
+	background: #242938;
+	border-color: #333a4d;
+}
+
+.drop-hint {
+	position: absolute;
+	bottom: 62px;
+	left: 50%;
+	transform: translateX(-50%);
+	background: #232a3a;
+	color: #fff;
+	border-radius: 8px;
+	padding: 6px 14px;
+	font-size: 12.5px;
+	box-shadow: var(--shadow-md);
+	z-index: 40;
+	pointer-events: none;
+	white-space: nowrap;
+}
+.drop-hint--child {
+	background: var(--brand);
+}
+.drop-hint--sibling-before,
+.drop-hint--sibling-after {
+	background: #0f766e;
+}
+
+/* vertical handles for top-down / bottom-up structures */
+.mind-handle--vertical {
+	opacity: 0;
+}
+.mind-node:hover .mind-handle--vertical,
+.mind-node.is-selected .mind-handle--vertical {
+	opacity: 1;
+}
+
+/* selection rectangle drawn while box-selecting */
+.editor.is-selecting .react-flow__selection {
+	background: rgba(99, 102, 241, 0.08);
+	border: 1px solid var(--brand);
+}
+.btn-ghost.is-active {
+	background: #eef0ff;
+	border-color: var(--brand);
+	color: var(--brand-dark);
+}
+.editor.is-dark .btn-ghost.is-active {
+	background: #2f3547;
+	border-color: #6366f1;
+	color: #a5b4fc;
 }
 .mind-node--root .mind-node__input::selection {
 	background: rgba(255, 255, 255, 0.35);

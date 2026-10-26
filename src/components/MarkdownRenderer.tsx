@@ -1,7 +1,39 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
+import rehypeRaw from 'rehype-raw';
+import { visit } from 'unist-util-visit';
+
+/**
+ * Turn `==text==` into <mark>text</mark>.
+ *
+ * GFM has no highlight syntax, so we add it as a tiny remark plugin. Doing it
+ * here (not in CSS) keeps the stored label plain Markdown that any renderer can
+ * round-trip.
+ */
+function remarkHighlight() {
+	return (tree: any) => {
+		visit(tree, 'text', (node: any, index: number | undefined, parent: any) => {
+			if (!parent || index === undefined || !node.value.includes('==')) return;
+			const parts = String(node.value).split(/(==[^=]+==)/g).filter(Boolean);
+			if (parts.length < 2) return;
+
+			const replacement = parts.map((part: string) => {
+				const m = /^==([^=]+)==$/.exec(part);
+				if (m) {
+					return {
+						type: 'emphasis',
+						data: { hName: 'mark', hProperties: { className: 'md-mark' } },
+						children: [{ type: 'text', value: m[1] }],
+					};
+				}
+				return { type: 'text', value: part };
+			});
+			parent.children.splice(index, 1, ...replacement);
+		});
+	};
+}
 
 /**
  * The Markdown parser, isolated in its own module so it can be code-split.
@@ -9,9 +41,12 @@ import remarkBreaks from 'remark-breaks';
  * breaks the user typed in the node editor.
  */
 function MarkdownRenderer({ source }: { source: string }) {
+	const plugins = useMemo(() => [remarkGfm, remarkBreaks, remarkHighlight], []);
+
 	return (
 		<ReactMarkdown
-			remarkPlugins={[remarkGfm, remarkBreaks]}
+			remarkPlugins={plugins}
+			rehypePlugins={[rehypeRaw]}
 			components={{
 				// open links in a new tab, never navigate the editor away
 				a: ({ children, href }) => (

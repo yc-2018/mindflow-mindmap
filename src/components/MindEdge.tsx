@@ -42,10 +42,24 @@ function pickPath(args: {
 }) {
 	const { sourceX, sourceY, targetX, targetY, sourceHandleId } = args;
 
+	const dx = Math.abs(targetX - sourceX);
+	const dy = Math.abs(targetY - sourceY);
+
+	// vertical connectors (top-down / bottom-up structures)
+	const vertical =
+		sourceHandleId === HANDLE.sourceBottom ||
+		sourceHandleId === HANDLE.sourceTop;
+
+	if (vertical) {
+		const [path, labelX, labelY] = getSmoothStepPath({
+			...args,
+			borderRadius: Math.min(14, Math.max(6, dx / 3)),
+		});
+		return { path, labelX, labelY };
+	}
+
 	// leaving from the LEFT handle means the target is behind us: use a curve
 	const leavingLeft = sourceHandleId === HANDLE.sourceLeft;
-	const dy = Math.abs(targetY - sourceY);
-	const dx = Math.abs(targetX - sourceX);
 
 	if (leavingLeft || dx < 24) {
 		const [path, labelX, labelY] = getBezierPath({

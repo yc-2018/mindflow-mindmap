@@ -33,6 +33,10 @@ export interface MindNodeData extends Record<string, unknown> {
 	editing?: boolean;
 	/** Number of uploads currently in flight for this node (shows a spinner). */
 	uploading?: number;
+	/** For two-sided structures: which half of the map this subtree lives on. */
+	side?: 'left' | 'right';
+	/** Manual sibling order within the parent (lower = earlier). */
+	order?: number;
 }
 
 export type MindNode = Node<MindNodeData, 'mind'>;
@@ -44,6 +48,8 @@ export interface MapDoc {
 	viewport?: { x: number; y: number; zoom: number };
 	/** Theme id, see lib/themes.ts. Defaults to 'classic'. */
 	theme?: string;
+	/** Structure id, see lib/structures.ts. Defaults to 'balanced'. */
+	structure?: string;
 }
 
 export const EMPTY_DOC: MapDoc = { nodes: [], edges: [] };
@@ -91,6 +97,7 @@ export function parseDoc(raw: string | undefined | null): MapDoc {
 			edges: Array.isArray(parsed.edges) ? parsed.edges : [],
 			viewport: parsed.viewport,
 			theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
+			structure: typeof parsed.structure === 'string' ? parsed.structure : undefined,
 		};
 	} catch {
 		return { ...EMPTY_DOC };
