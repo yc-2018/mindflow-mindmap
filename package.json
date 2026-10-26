@@ -25,9 +25,8 @@
 		"@types/react-dom": "^19.3.0",
 		"@vitejs/plugin-react": "^6.1.2",
 		"html-to-image": "^1.11.13",
-		"puppeteer-core": "^25.16.0",
 		"typescript": "^5.9.3",
 		"vite": "^8.3.5",
-		"vite-node": "^6.0.0"
+		"wrangler": "^4.152.0"
 	}
 }
