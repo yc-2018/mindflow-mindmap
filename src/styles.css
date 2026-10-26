@@ -716,6 +716,99 @@ select {
 	background: var(--bg);
 }
 
+/* Dark canvas theme: the chrome (top bar, tips, controls) follows the canvas,
+   otherwise a light toolbar floats over a near-black map and looks broken. */
+.editor.is-dark .editor__bar {
+	background: #1e2230;
+	border-bottom-color: #2f3547;
+}
+.editor.is-dark .editor__title {
+	color: #e5e9f5;
+}
+.editor.is-dark .editor__title:hover {
+	background: #262c3c;
+}
+.editor.is-dark .editor__title:focus {
+	background: #242938;
+	border-color: #6366f1;
+	color: #fff;
+}
+.editor.is-dark .editor__divider {
+	background: #333a4d;
+}
+.editor.is-dark .editor__history {
+	background: #262c3c;
+}
+.editor.is-dark .icon-btn {
+	color: #98a1b3;
+}
+.editor.is-dark .icon-btn:hover {
+	background: #2f3547;
+	color: #e5e9f5;
+}
+.editor.is-dark .btn-ghost {
+	background: #242938;
+	border-color: #333a4d;
+	color: #b8c0d0;
+}
+.editor.is-dark .btn-ghost:hover:not(:disabled) {
+	background: #2c3344;
+	border-color: #3f4760;
+	color: #fff;
+}
+.editor.is-dark .save-state {
+	color: #7b8499;
+}
+.editor.is-dark .editor__stats {
+	background: rgba(36, 41, 56, 0.92);
+	border-color: #333a4d;
+	color: #98a1b3;
+}
+.editor.is-dark .editor__tips {
+	color: #5f6878;
+}
+.editor.is-dark .react-flow__controls {
+	border-color: #333a4d;
+}
+.editor.is-dark .react-flow__controls-button {
+	background: #242938;
+	border-bottom-color: #333a4d;
+	fill: #b8c0d0;
+}
+.editor.is-dark .react-flow__controls-button:hover {
+	background: #2f3547;
+}
+.editor.is-dark .react-flow__minimap {
+	border-color: #333a4d;
+}
+.editor.is-dark .mind-edge-label {
+	background: #242938;
+	border-color: #333a4d;
+	color: #b8c0d0;
+}
+.editor.is-dark .mind-edge-input {
+	background: #242938;
+	color: #e5e9f5;
+	border-color: #6366f1;
+}
+.editor.is-dark .mind-thumb {
+	border-color: #333a4d;
+	background: #2a3040;
+}
+.editor.is-dark .mind-thumb__add {
+	background: #242938;
+	border-color: #3f4760;
+	color: #7b8499;
+}
+.editor.is-dark .mind-thumb__add:hover {
+	border-color: #818cf8;
+	color: #a5b4fc;
+	background: #2a3040;
+}
+.editor.is-dark .mind-node__count {
+	background: rgba(255, 255, 255, 0.12);
+}
+
 .editor__title {
 	border: 1px solid transparent;
 	background: transparent;
@@ -871,54 +964,60 @@ select {
 .mind-node {
 	position: relative;
 	width: 210px;
-	background: var(--surface);
-	border: 1.5px solid var(--line);
+	background: var(--node-bg, var(--surface));
+	border: 1.5px solid var(--node-border, var(--line));
 	border-radius: 11px;
 	box-shadow: var(--shadow-sm);
-	transition: box-shadow 0.16s ease, border-color 0.16s ease;
+	transition: box-shadow 0.16s ease, border-color 0.16s ease, background 0.2s ease;
 	/* NOTE: must stay visible so the "+" button, which overhangs the right
 	   edge, is not clipped in half. Inner elements round their own corners. */
 	overflow: visible;
+	color: var(--node-text, var(--text));
 }
 .mind-node:hover {
 	box-shadow: var(--shadow-md);
 }
 .mind-node.is-selected {
-	border-color: var(--brand);
-	box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.16);
+	border-color: var(--node-accent, var(--brand));
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--node-accent, var(--brand)) 22%, transparent);
 }
 /* the "+" button must stay above the selection ring */
 .mind-node.is-selected .mind-node__add {
 	z-index: 6;
 }
 
-.mind-node--root {
-	background: var(--green);
-	border-color: #2fae7a;
-}
+/* tones only set text weight now; colors come from the theme via CSS vars */
 .mind-node--root .mind-node__label {
-	color: #fff;
 	font-weight: 600;
-}
-.mind-node--root .mind-node__add {
-	/* keep the button readable on the green root: white icon on the green body,
-	   switching to a solid brand circle on hover */
-	background: var(--green);
-	border-color: rgba(255, 255, 255, 0.7);
-	color: #fff;
-}
-.mind-node--root .mind-node__add:hover {
-	background: #fff;
-	border-color: #fff;
-	color: #2fae7a;
-}
-
-.mind-node--branch {
-	background: #f7f8ff;
-	border-color: #d9dffb;
 }
 .mind-node--branch .mind-node__label {
 	font-weight: 550;
+}
+
+/* collapsed nodes get a subtle dashed hint */
+.mind-node.is-collapsed {
+	border-style: dashed;
+}
+
+.mind-node__count {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 16px;
+	height: 16px;
+	margin-left: 6px;
+	padding: 0 4px;
+	border-radius: 8px;
+	font-size: 10.5px;
+	font-weight: 600;
+	line-height: 1;
+	background: color-mix(in srgb, var(--node-accent, var(--brand)) 16%, transparent);
+	color: var(--node-accent, var(--brand));
+	flex-shrink: 0;
+}
+.mind-node--root .mind-node__count {
+	background: rgba(255, 255, 255, 0.26);
+	color: #fff;
 }
 
 .mind-node__label {
@@ -945,9 +1044,6 @@ select {
 	resize: none;
 	overflow: hidden;
 	word-break: break-word;
-}
-.mind-node--root .mind-node__input {
-	color: #fff;
 }
 .mind-node--root .mind-node__input::selection {
 	background: rgba(255, 255, 255, 0.35);
@@ -1148,15 +1244,12 @@ select {
 	object-fit: cover;
 }
 
-/* on the green root node, markdown text and code must stay legible */
-.mind-node--root .md-label {
-	color: #fff;
-}
+/* root nodes use the theme's light-on-dark text, so inner markdown needs care */
 .mind-node--root .md-label code {
 	background: rgba(255, 255, 255, 0.22);
 }
 .mind-node--root .md-label a {
-	color: #fff;
+	color: inherit;
 	text-decoration-color: rgba(255, 255, 255, 0.7);
 }
 .mind-node--root .md-label blockquote {
@@ -1170,10 +1263,19 @@ select {
 .mind-handle {
 	width: 7px;
 	height: 7px;
-	background: #fff;
-	border: 1.5px solid var(--line-strong);
+	background: var(--surface);
+	border: 1.5px solid var(--node-border, var(--line-strong));
 	opacity: 0;
 	transition: opacity 0.15s ease;
+}
+/* Both handles on a side occupy the same edge, so offset them slightly:
+   the target sits a touch above centre and the source a touch below. This keeps
+   them individually hittable while looking like a single connection point. */
+.mind-handle--src-left {
+	transform: translate(0, 3px);
+}
+.mind-handle--tgt-right {
+	transform: translate(0, -3px);
 }
 .mind-node:hover .mind-handle,
 .mind-node.is-selected .mind-handle {
@@ -1190,9 +1292,9 @@ select {
 	padding: 0;
 	box-sizing: border-box;
 	border-radius: 50%;
-	background: var(--surface);
-	border: 1.5px solid var(--line-strong);
-	color: var(--text-dim);
+	background: var(--node-bg, var(--surface));
+	border: 1.5px solid var(--node-border, var(--line-strong));
+	color: var(--node-text, var(--text-dim));
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -1207,9 +1309,14 @@ select {
 	opacity: 1;
 }
 .mind-node__add:hover {
-	border-color: var(--brand);
-	color: var(--brand);
+	border-color: var(--node-accent, var(--brand));
+	color: var(--node-accent, var(--brand));
+	background: var(--surface);
 	transform: translateY(-50%) scale(1.12);
+}
+/* the collapse toggle is always visible: it is a structural control, not a hint */
+.mind-node__add.is-collapse {
+	opacity: 1;
 }
 
 .mind-edge-label {
@@ -1402,6 +1509,134 @@ select {
 	border-radius: 20px;
 	padding: 4px 13px;
 	letter-spacing: 0.04em;
+}
+
+/* ---------- theme picker ---------- */
+
+.theme-picker {
+	position: relative;
+}
+
+.theme-panel {
+	position: absolute;
+	top: calc(100% + 8px);
+	right: 0;
+	width: 328px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: 13px;
+	box-shadow: var(--shadow-lg);
+	padding: 12px;
+	z-index: 120;
+	animation: pop 0.15s ease;
+}
+
+.theme-panel__head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 10px;
+	padding-left: 3px;
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--text-dim);
+}
+.theme-panel__head .icon-btn {
+	width: 24px;
+	height: 24px;
+}
+
+.theme-panel__grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 8px;
+}
+
+.theme-card {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 5px;
+	border-radius: 9px;
+	border: 1px solid transparent;
+	background: none;
+	text-align: left;
+	transition: all 0.14s ease;
+}
+.theme-card:hover {
+	background: #f6f7fb;
+	border-color: var(--line);
+}
+.theme-card.is-active {
+	border-color: var(--brand);
+	background: #f4f5ff;
+}
+
+.theme-card__preview {
+	position: relative;
+	height: 52px;
+	border-radius: 7px;
+	border: 1px solid;
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	padding: 0 7px;
+	overflow: hidden;
+}
+.theme-card__root {
+	width: 18px;
+	height: 18px;
+	border-radius: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+}
+.theme-card__dot {
+	width: 6px;
+	height: 2px;
+	border-radius: 1px;
+	opacity: 0.9;
+}
+.theme-card__branch,
+.theme-card__leaf {
+	width: 14px;
+	height: 10px;
+	border-radius: 3px;
+	border: 1px solid;
+	flex-shrink: 0;
+}
+.theme-card__check {
+	position: absolute;
+	top: 3px;
+	right: 3px;
+	width: 15px;
+	height: 15px;
+	border-radius: 50%;
+	background: var(--brand);
+	color: #fff;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.theme-card__name {
+	font-size: 11px;
+	color: var(--text-dim);
+	font-weight: 500;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.theme-card__swatches {
+	display: flex;
+	gap: 2px;
+}
+.theme-card__swatches span {
+	width: 8px;
+	height: 3px;
+	border-radius: 1.5px;
 }
 
 /* ---------- admin ---------- */

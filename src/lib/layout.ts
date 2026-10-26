@@ -38,6 +38,7 @@ interface Tree {
  */
 function buildTree(nodes: MindNode[], edges: Edge[]): Tree {
 	const ids = new Set(nodes.map((n) => n.id));
+	const byId = new Map(nodes.map((n) => [n.id, n]));
 	const children = new Map<string, string[]>();
 	const parentOf = new Map<string, string>();
 
@@ -66,6 +67,12 @@ function buildTree(nodes: MindNode[], edges: Edge[]): Tree {
 
 		children.get(e.source)!.push(e.target);
 		parentOf.set(e.target, e.source);
+	}
+
+	// A collapsed node behaves like a leaf: its subtree takes no vertical space,
+	// so the rest of the map closes up around it.
+	for (const [id, kids] of children) {
+		if (byId.get(id)?.data?.collapsed && kids.length) children.set(id, []);
 	}
 
 	let roots = nodes.filter((n) => !parentOf.has(n.id)).map((n) => n.id);

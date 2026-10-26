@@ -2,11 +2,14 @@ import { memo, useEffect, useRef, useState } from 'react';
 import {
 	BaseEdge,
 	EdgeLabelRenderer,
+	getBezierPath,
 	getSmoothStepPath,
 	useReactFlow,
 	type EdgeProps,
 } from '@xyflow/react';
 import { Trash2, X } from 'lucide-react';
+import { HANDLE } from '../lib/handles';
+import { useTheme } from '../lib/themeContext';
 
 /** Window event fired when an edge's delete button is pressed. */
 export const REMOVE_EDGE_EVENT = 'mindflow:remove-edge';
@@ -17,6 +20,53 @@ export interface MindEdgeData extends Record<string, unknown> {
 	label?: string;
 	/** True while the connector label is being edited in place. */
 	editing?: boolean;
+}
+
+/**
+ * Pick a connector path based on which handles the edge uses.
+ *
+ * `lib/handles.ts` already flips the handles when a node sits behind its parent
+ * (source-left / target-right), so by the time we get here the geometry is
+ * always "leave on this side, arrive on that side" — no big loop is possible.
+ * We only special-case the near-vertical / backwards situation, where a bezier
+ * reads better than an elbow.
+ */
+function pickPath(args: {
+	sourceX: number;
+	sourceY: number;
+	targetX: number;
+	targetY: number;
+	sourcePosition: EdgeProps['sourcePosition'];
+	targetPosition: EdgeProps['targetPosition'];
+	sourceHandleId?: string | null;
+}) {
+	const { sourceX, sourceY, targetX, targetY, sourceHandleId } = args;
+
+	// leaving from the LEFT handle means the target is behind us: use a curve
+	const leavingLeft = sourceHandleId === HANDLE.sourceLeft;
+	const dy = Math.abs(targetY - sourceY);
+	const dx = Math.abs(targetX - sourceX);
+
+	if (leavingLeft || dx < 24) {
+		const [path, labelX, labelY] = getBezierPath({
+			sourceX,
+			sourceY,
+			sourcePosition: args.sourcePosition,
+			targetX,
+			targetY,
+			targetPosition: args.targetPosition,
+			// tighter arc when the nodes are close together
+			curvature: dx < 120 ? 0.22 : 0.3,
+		});
+		return { path, labelX, labelY };
+	}
+
+	// normal forward layout: tidy elbow, softened when the drop is small
+	const [path, labelX, labelY] = getSmoothStepPath({
+		...args,
+		borderRadius: Math.min(14, Math.max(6, dy / 3)),
+	});
+	return { path, labelX, labelY };
 }
 
 /**
@@ -33,6 +83,8 @@ function MindEdge({
 	targetY,
 	sourcePosition,
 	targetPosition,
+	sourceHandleId,
+	targetHandleId,
 	label,
 	data,
 	markerEnd,
@@ -43,21 +95,25 @@ function MindEdge({
 	const [draft, setDraft] = useState('');
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const { updateEdgeData } = useReactFlow();
+	const theme = useTheme();
 
 	const edgeData = (data ?? {}) as MindEdgeData;
 	const editing = Boolean(edgeData.editing);
 	// `label` is the canonical field; data.label mirrors it for in-place edits
 	const shownLabel = typeof label === 'string' && label ? label : edgeData.label;
 
-	const [path, labelX, labelY] = getSmoothStepPath({
+	const { path, labelX, labelY } = pickPath({
 		sourceX,
 		sourceY,
 		targetX,
 		targetY,
 		sourcePosition,
 		targetPosition,
-		borderRadius: 14,
+		sourceHandleId,
 	});
+
+	const active = selected || hovered;
+	const stroke = active ? theme.edge.active : (style?.stroke as string) || theme.edge.stroke;
 
 	useEffect(() => {
 		if (editing) {
@@ -85,8 +141,9 @@ function MindEdge({
 				markerEnd={markerEnd}
 				style={{
 					...style,
-					stroke: selected || hovered ? '#818cf8' : (style?.stroke ?? '#cbd5e1'),
-					strokeWidth: selected || hovered ? 2.4 : (style?.strokeWidth ?? 1.8),
+					stroke,
+					strokeWidth: active ? 2.4 : (style?.strokeWidth ?? 1.8),
+					transition: 'stroke 0.15s ease',
 				}}
 			/>
 

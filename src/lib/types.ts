@@ -27,6 +27,8 @@ export interface MindNodeData extends Record<string, unknown> {
 	tone?: 'root' | 'branch' | 'leaf';
 	/** Collapsed subtree (children hidden). */
 	collapsed?: boolean;
+	/** Number of direct children — set by the editor, used by the collapse toggle. */
+	childCount?: number;
 	/** True while the label is being edited in place. */
 	editing?: boolean;
 	/** Number of uploads currently in flight for this node (shows a spinner). */
@@ -40,6 +42,8 @@ export interface MapDoc {
 	edges: Edge[];
 	/** Free-form canvas metadata (viewport, theme...). */
 	viewport?: { x: number; y: number; zoom: number };
+	/** Theme id, see lib/themes.ts. Defaults to 'classic'. */
+	theme?: string;
 }
 
 export const EMPTY_DOC: MapDoc = { nodes: [], edges: [] };
@@ -72,6 +76,7 @@ export function normalizeNode(node: MindNode): MindNode {
 			imageShowUrl: undefined,
 			editing: false,
 			uploading: 0,
+			collapsed: Boolean(data.collapsed),
 		},
 	};
 }
@@ -85,6 +90,7 @@ export function parseDoc(raw: string | undefined | null): MapDoc {
 			nodes,
 			edges: Array.isArray(parsed.edges) ? parsed.edges : [],
 			viewport: parsed.viewport,
+			theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
 		};
 	} catch {
 		return { ...EMPTY_DOC };

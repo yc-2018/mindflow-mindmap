@@ -67,7 +67,27 @@ npx vite                         # 终端 B
 
 首次请求任一 `/api/*` 时，会自动用 `ADMIN_EMAIL` / `ADMIN_PASSWORD` 创建管理员账号（若不存在）。
 
-## 部署
+## 部署（Git 自动构建）
+
+生产环境走 **Cloudflare Workers Builds** 的 Git 集成，不再手动 `wrangler deploy`：
+
+```
+本地改代码 → git commit → git push → Cloudflare 自动构建部署 → 线上更新
+```
+
+一次性配置（Cloudflare Dashboard → Workers & Pages → `mindflow` → Settings → Builds）：
+
+| 项 | 值 |
+|---|---|
+| Git 仓库 | `yc-2018/mindflow-mindmap`（分支 `main`） |
+| Build command | `npm run build` |
+| Deploy command | `npx wrangler deploy` |
+| Root directory | `/` |
+| Node version | 22 |
+
+仓库里的 `.npmrc` 把 registry 固定到 `registry.npmjs.org`，避免开发者本机的私有 registry 泄漏进 CI（这曾导致 `npm E401`）。
+
+手动部署（应急用）：
 
 ```bash
 # 生产密钥
@@ -79,7 +99,7 @@ wrangler secret put SESSION_SECRET
 wrangler d1 migrations apply mindflow --remote
 
 # 构建 + 部署
-npm run build && wrangler deploy
+npm run deploy
 ```
 
 ## 数据模型
@@ -89,16 +109,31 @@ users (id, email, name, password_hash, salt, role, created_at)
 maps  (id, owner_id, title, data, share_token, created_at, updated_at)
 ```
 
-`maps.data` 是 JSON 字符串：`{ nodes, edges, viewport }`，节点数据形如：
+`maps.data` 是 JSON 字符串：`{ nodes, edges, viewport, theme }`，节点数据形如：
 
 ```json
 {
   "id": "n_x", "type": "mind", "position": { "x": 0, "y": 0 },
-  "data": { "label": "主题", "tone": "root", "image": "https://t3.pixhost.cc/thumbs/...", "imageShowUrl": "https://pixhost.cc/show/..." }
+  "data": {
+    "label": "**Markdown** 支持\n换行也保留",
+    "tone": "root",
+    "images": [
+      { "id": "img_1", "thumbUrl": "https://t3.pixhost.cc/thumbs/...", "fullUrl": "https://img3.pixhost.cc/images/..." }
+    ],
+    "collapsed": false,
+    "childCount": 2
+  }
 }
+```
+
+连线带自适应手柄，反向连接不会绕大弯：
+
+```json
+{ "id": "e_1", "source": "n_a", "target": "n_b", "type": "mind", "sourceHandle": "s-right", "targetHandle": "t-left", "label": "可选文字" }
 ```
 
 ## 说明
 
 - `workers.dev` 域名在国内存在 DNS 污染，直连可能超时；自定义域名 `245556.xyz` 正常。
 - 图床是第三方公开服务，图片长期可用性取决于 pixhost；如需长期保存可改存 R2。
+- 上传前会在浏览器里转成 WebP，超过图床 10MB 上限时自动降质/降尺寸。
