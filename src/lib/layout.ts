@@ -231,24 +231,40 @@ function layoutDirected(
 export function syncTones(nodes: MindNode[], edges: Edge[]): MindNode[] {
 	const tree = buildTree(nodes, edges);
 	const depth = new Map<string, number>();
+	/** Which forest root each node descends from. */
+	const rootOf = new Map<string, string>();
 
-	const walk = (id: string, d: number, stack: Set<string>) => {
+	const walk = (id: string, d: number, rootId: string, stack: Set<string>) => {
 		if (stack.has(id)) return;
 		stack.add(id);
 		depth.set(id, d);
-		for (const k of tree.children.get(id) ?? []) walk(k, d + 1, stack);
+		rootOf.set(id, rootId);
+		for (const k of tree.children.get(id) ?? []) walk(k, d + 1, rootId, stack);
 		stack.delete(id);
 	};
 
-	for (const r of tree.roots) walk(r, 0, new Set());
+	for (const r of tree.roots) walk(r, 0, r, new Set());
 	// detached nodes are their own roots
 	for (const n of nodes) {
-		if (!depth.has(n.id)) walk(n.id, 0, new Set());
+		if (!depth.has(n.id)) walk(n.id, 0, n.id, new Set());
 	}
+
+	// Only ONE node should wear the accent "root" colour: the map's primary root.
+	// Other detached trees are still roots structurally, but painting them the same
+	// accent as the centre theme made them look like a row of duplicate centres.
+	const primary = primaryRoot(tree, nodes);
 
 	return nodes.map((n) => {
 		const d = depth.get(n.id) ?? 0;
-		const tone: 'root' | 'branch' | 'leaf' = d === 0 ? 'root' : d === 1 ? 'branch' : 'leaf';
+		let tone: 'root' | 'branch' | 'leaf';
+		if (d === 0) {
+			// the primary root is "root"; a detached tree's root reads as a branch
+			tone = n.id === primary ? 'root' : 'branch';
+		} else if (d === 1) {
+			tone = 'branch';
+		} else {
+			tone = 'leaf';
+		}
 		if (n.data?.tone === tone) return n;
 		return { ...n, data: { ...n.data, tone } };
 	});
@@ -264,6 +280,75 @@ function splitSides(childrenOfRoot: string[]): { right: string[]; left: string[]
 		else left.push(id);
 	});
 	return { right, left };
+}
+
+/**
+ * Lay out every node the caller did not reach.
+ *
+ * These are detached roots: nodes whose parent chain is broken, or that were
+ * dragged off on their own. Leaving them unpositioned made them all pile up at
+ * one point on top of the map (the "独立节点全部叠在一起" bug), so we arrange
+ * them in a tidy grid below everything else, each keeping its own subtree.
+ *
+ * Mutates `placed` and returns it for convenience.
+ */
+function placeLeftovers(
+	nodes: MindNode[],
+	tree: Tree,
+	placed: Map<string, { x: number; y: number }>,
+): Map<string, { x: number; y: number }> {
+	const leftovers = nodes.filter((n) => !placed.has(n.id));
+	if (!leftovers.length) return placed;
+
+	const byId = new Map(nodes.map((n) => [n.id, n]));
+	const leftoverSet = new Set(leftovers.map((n) => n.id));
+
+	// only the ROOTS of the leftover forest; children follow their parent
+	const hasParentInside = new Set<string>();
+	for (const [parent, kids] of tree.children) {
+		if (!leftoverSet.has(parent)) continue;
+		for (const k of kids) if (leftoverSet.has(k)) hasParentInside.add(k);
+	}
+	const orphanRoots = leftovers.filter((n) => !hasParentInside.has(n.id));
+
+	// start below whatever is already placed so the grid never overlaps
+	let lowest = 0;
+	for (const p of placed.values()) lowest = Math.max(lowest, p.y);
+	const startY = lowest + 90;
+
+	const COLS = 4;
+	const COL_W = NODE_WIDTH + 56;
+	const ROW_H = 96;
+
+	/** Vertical stack for one orphan subtree; returns the y after its last node. */
+	const placeStack = (id: string, x: number, y: number): number => {
+		const node = byId.get(id);
+		if (!node) return y;
+		const h = estimateHeight(node);
+		placed.set(id, { x, y });
+		let nextY = y + h + 16;
+		for (const k of tree.children.get(id) ?? []) {
+			nextY = placeStack(k, x + 24, nextY); // slight indent for children
+		}
+		return nextY;
+	};
+
+	let col = 0;
+	let row = 0;
+	for (const root of orphanRoots) {
+		const endY = placeStack(root.id, col * COL_W, startY + row * ROW_H);
+		col += 1;
+		if (col >= COLS) {
+			col = 0;
+			row += 1;
+		} else if (endY > startY + (row + 1) * ROW_H) {
+			// a tall stack consumes extra rows so the next cell cannot collide
+			row += Math.ceil((endY - startY) / ROW_H) - row;
+			col = 0;
+		}
+	}
+
+	return placed;
 }
 
 /**
@@ -334,6 +419,10 @@ function layoutTwoSided(
 		if (!leftSet.has(id)) continue;
 		placed.set(id, { x: p.x, y: p.y - rootLeftY });
 	}
+
+	// Detached nodes belong to neither half, so they must be laid out separately
+	// — otherwise they all end up unpositioned and stack on top of each other.
+	placeLeftovers(nodes, tree, placed);
 	return placed;
 }
 
@@ -423,12 +512,54 @@ function layoutFishbone(
 		cursor += (widths.get(id) ?? NODE_WIDTH) + SLOT_GAP;
 	});
 
-	// detached nodes become free-floating roots near the origin
-	for (const n of nodes) {
-		if (!placed.has(n.id)) placed.set(n.id, { x: 0, y: 0 });
-	}
+	/**
+	 * Place every node the fishbone did not reach.
+	 *
+	 * These are detached roots (their parent chain is broken, or they were
+	 * dragged off on their own). Dumping them all at (0,0) stacked them into one
+	 * pile on top of the head, so they go into a tidy grid below the spine.
+	 */
+	placeLeftovers(nodes, tree, placed);
 
 	return placed;
+}
+
+/**
+ * Pick the map's PRIMARY root.
+ *
+ * `tree.roots[0]` is just the first parentless node in declaration order, which
+ * can easily be a detached node that happens to come first. Structures like the
+ * fishbone then treat that orphan as the "head" and squeeze the real tree into
+ * the leftovers grid.
+ *
+ * So we choose the root whose subtree contains the most nodes — the actual
+ * centre of the map. Ties fall back to declaration order.
+ */
+function primaryRoot(tree: Tree, nodes: MindNode[]): string | undefined {
+	if (!tree.roots.length) return undefined;
+	const sizeOf = new Map<string, number>();
+
+	const count = (id: string, stack: Set<string>): number => {
+		if (stack.has(id)) return 0;
+		stack.add(id);
+		let n = 1;
+		for (const k of tree.children.get(id) ?? []) n += count(k, stack);
+		stack.delete(id);
+		return n;
+	};
+
+	let best = tree.roots[0];
+	let bestSize = -1;
+	for (const r of tree.roots) {
+		const size = count(r, new Set());
+		sizeOf.set(r, size);
+		if (size > bestSize) {
+			bestSize = size;
+			best = r;
+		}
+	}
+	void nodes;
+	return best;
 }
 
 /**
@@ -464,7 +595,7 @@ export function layoutTree(
 			break;
 
 		case 'both': {
-			const rootId = tree.roots[0];
+			const rootId = primaryRoot(tree, nodes);
 			if (!rootId) {
 				positioned = layoutDirected(nodes, tree, 'right', { x: 0, y: 0 });
 				break;
@@ -474,7 +605,7 @@ export function layoutTree(
 		}
 
 		case 'fishbone': {
-			const rootId = tree.roots[0];
+			const rootId = primaryRoot(tree, nodes);
 			if (!rootId) {
 				positioned = layoutDirected(nodes, tree, 'right', { x: 0, y: 0 });
 				break;

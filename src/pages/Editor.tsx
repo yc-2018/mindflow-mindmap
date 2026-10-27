@@ -118,7 +118,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	/** Screen->flow box of the dragged node at drag start, used by the detach test. */
 	const dragOriginBoxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
-	const { fitView, getViewport, setViewport, screenToFlowPosition } = useReactFlow();
+	const { fitView, getViewport, screenToFlowPosition } = useReactFlow();
 	const fileRef = useRef<HTMLInputElement | null>(null);
 	const uploadTarget = useRef<string | null>(null);
 	const saveTimer = useRef<number | null>(null);
@@ -166,14 +166,28 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 					...n,
 					data: { ...n.data, childCount: counts.get(n.id) ?? 0 },
 				}));
-				setNodes(withCounts);
+
+				/**
+				 * Re-run the layout on load.
+				 *
+				 * Saved coordinates can be stale or degenerate — detached nodes in
+				 * particular were once persisted at (0,0), so opening such a
+				 * document showed them piled on one point. Recomputing from the
+				 * structure guarantees a sane arrangement regardless of what was
+				 * stored, and keeps the visual identical to a fresh "整理布局".
+				 */
+				const struct = getStructure(doc.structure);
+				const laidOut = layoutTree(withCounts, pruned, struct);
+
+				setNodes(laidOut);
 				setEdges(pruned);
 				setThemeId(doc.theme || 'classic');
-				setStructure(getStructure(doc.structure));
+				setStructure(struct);
 				history.reset();
 				requestAnimationFrame(() => {
-					if (doc.viewport) setViewport(doc.viewport);
-					else fitView({ padding: 0.25, duration: 300 });
+					// the stored viewport may point at the old arrangement; re-fit
+					// whenever we just relaid everything out
+					fitView({ padding: 0.25, duration: 300 });
 				});
 			})
 			.catch((err) => {
@@ -188,7 +202,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			alive = false;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [mapId, fitView, setViewport]);
+	}, [mapId, fitView]);
 
 	// ---- persist (debounced) ----
 	const persist = useCallback(
