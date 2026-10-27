@@ -554,13 +554,42 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 
 			const id = uid();
 			const tone = parent ? (parent.data.tone === 'root' ? 'branch' : 'leaf') : 'root';
+
+			/**
+			 * A new node inherits the side its parent sits on.
+			 *
+			 * In the two-sided structure, giving the new child the correct side up
+			 * front stops it from being dumped on the opposite half — which used to
+			 * make the whole map appear to "curl up" when a node was added on one side.
+			 */
+			const rootNode = nodes.find((n) => n.data.tone === 'root');
+			let side: 'left' | 'right' | undefined;
+			if (parent && rootNode && parent.id !== rootNode.id) {
+				if (parent.data.side === 'left' || parent.data.side === 'right') {
+					side = parent.data.side;
+				} else if (Number.isFinite(parent.position?.x)) {
+					side = parent.position.x < rootNode.position.x ? 'left' : 'right';
+				}
+			}
+
 			const newNode: MindNode = {
 				id,
 				type: 'mind',
 				position: parent
-					? { x: parent.position.x + NODE_WIDTH + 76, y: parent.position.y + 90 }
+					? {
+							x: parent.position.x + (side === 'left' ? -(NODE_WIDTH + 76) : NODE_WIDTH + 76),
+							y: parent.position.y + 90,
+						}
 					: { x: 0, y: 0 },
-				data: { label: '新主题', tone, editing: true, images: [], uploading: 0, childCount: 0 },
+				data: {
+					label: '新主题',
+					tone,
+					editing: true,
+					images: [],
+					uploading: 0,
+					childCount: 0,
+					...(side ? { side } : {}),
+				},
 				selected: true,
 			};
 
@@ -578,14 +607,20 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 						{ id: uid('e'), source: parent.id, target: id, type: 'mind' },
 					];
 					setEdges(nextEdges);
-					return relayoutAll(nextNodes, nextEdges, structure);
+					/**
+					 * Keep every existing placement; only the new node gets laid out.
+					 *
+					 * A full `relayoutAll` here wiped all manual positions, so adding one
+					 * child rearranged the entire map — the reported "盘起来了".
+					 */
+					return layoutTree(nextNodes, nextEdges, structure, { keepPinned: true });
 				});
 			});
 
 			markDirty();
 			requestAnimationFrame(() => fitView({ padding: 0.3, duration: 260 }));
 		},
-		[nodes, edges, markDirty, readOnly, fitView, withHistory, structure, relayout],
+		[nodes, edges, markDirty, readOnly, fitView, withHistory, structure],
 	);
 
 	const addSibling = useCallback(() => {
@@ -629,15 +664,51 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	const changeStructure = useCallback(
 		(sid: StructureId) => {
 			setStructure(sid);
-			// two-sided layouts need a side flag on each child of the root
 			setNodes((nds) => {
 				let next = nds;
 				if (sid === 'both' || sid === 'fishbone') {
 					const root = next.find((n) => n.data.tone === 'root');
 					if (root) {
 						const kids = childrenOf(edges, root.id);
+						const byId = new Map(next.map((n) => [n.id, n]));
 						const sideOf = new Map<string, 'left' | 'right'>();
-						kids.forEach((id, i) => sideOf.set(id, i % 2 === 0 ? 'right' : 'left'));
+
+						/**
+						 * Preserve sides that are already assigned, and only balance the
+						 * ones that have none.
+						 *
+						 * Alternating purely by index (the old code) re-shuffled every
+						 * child whenever the list changed length, so simply adding a node
+						 * flipped the whole map's sides.
+						 */
+						let rightCount = 0;
+						let leftCount = 0;
+						for (const id of kids) {
+							const flag = byId.get(id)?.data?.side;
+							if (flag === 'left') {
+								sideOf.set(id, 'left');
+								leftCount++;
+							} else if (flag === 'right') {
+								sideOf.set(id, 'right');
+								rightCount++;
+							}
+						}
+						for (const id of kids) {
+							if (sideOf.has(id)) continue;
+							// no explicit side: keep the current x if it means something,
+							// otherwise balance the halves
+							const x = byId.get(id)?.position?.x;
+							let side: 'left' | 'right';
+							if (typeof x === 'number' && Number.isFinite(x) && Math.abs(x - root.position.x) > 1) {
+								side = x < root.position.x ? 'left' : 'right';
+							} else {
+								side = rightCount <= leftCount ? 'right' : 'left';
+							}
+							sideOf.set(id, side);
+							if (side === 'right') rightCount++;
+							else leftCount++;
+						}
+
 						// propagate the side down each subtree
 						const paint = (id: string, side: 'left' | 'right') => {
 							sideOf.set(id, side);

@@ -434,15 +434,53 @@ function placeLeftovers(
 	return placed;
 }
 
-/** Split the root's children into a left and a right half for the two-sided layouts. */
-function splitSides(childrenOfRoot: string[]): { right: string[]; left: string[] } {
+/**
+ * Split the root's children into a left and a right half for the two-sided
+ * layouts.
+ *
+ * Side is decided in this priority order:
+ *  1. an explicit `data.side` flag (set when the user switches to this
+ *     structure, or by dragging a node across the root)
+ *  2. the node's current x relative to the root
+ *  3. balancing whichever half has fewer children
+ *
+ * The old implementation alternated purely by index, so adding one child
+ * shifted every later child's parity — the entire map flipped sides and looked
+ * scrambled. Priority 1+2 keep existing nodes where they already are.
+ */
+function splitSides(
+	childrenOfRoot: string[],
+	byId: Map<string, MindNode>,
+	rootX: number,
+): { right: string[]; left: string[] } {
 	const right: string[] = [];
 	const left: string[] = [];
-	childrenOfRoot.forEach((id, i) => {
-		// alternate but keep the first half on the right so reading order is natural
-		if (i % 2 === 0) right.push(id);
+
+	for (const id of childrenOfRoot) {
+		const node = byId.get(id);
+		const flag = node?.data?.side;
+		if (flag === 'left') {
+			left.push(id);
+			continue;
+		}
+		if (flag === 'right') {
+			right.push(id);
+			continue;
+		}
+
+		const x = node?.position?.x;
+		if (typeof x === 'number' && Number.isFinite(x) && Math.abs(x - rootX) > 1) {
+			// keep it on the side it already occupies
+			if (x > rootX) right.push(id);
+			else left.push(id);
+			continue;
+		}
+
+		// unknown position: balance the halves
+		if (right.length <= left.length) right.push(id);
 		else left.push(id);
-	});
+	}
+
 	return { right, left };
 }
 
@@ -461,7 +499,10 @@ function layoutTwoSided(
 	rootId: string,
 ): Map<string, { x: number; y: number }> {
 	const kids = tree.children.get(rootId) ?? [];
-	const { right, left } = splitSides(kids);
+	const rootNode = nodes.find((n) => n.id === rootId);
+	const rootX = rootNode?.position?.x ?? 0;
+	const byIdAll = new Map(nodes.map((n) => [n.id, n]));
+	const { right, left } = splitSides(kids, byIdAll, rootX);
 
 	// Deep-copy the children map (including every array) before overriding the
 	// root's list. A shallow `new Map(tree.children)` shares the arrays, so
@@ -687,16 +728,41 @@ export function layoutTree(
 			break;
 	}
 
-	// normalise: shift everything so the top-left of the bounding box is (0,0)
-	let minX = Infinity;
-	let minY = Infinity;
-	for (const p of positioned.values()) {
-		minX = Math.min(minX, p.x);
-		minY = Math.min(minY, p.y);
-	}
-	if (Number.isFinite(minX)) {
-		for (const [id, p] of positioned) {
-			positioned.set(id, { x: p.x - minX, y: p.y - minY });
+	/**
+	 * Anchor the layout to the map's existing root position.
+	 *
+	 * The old code shifted everything so the bounding box's top-left landed at
+	 * (0,0). Every time the map grew to the LEFT (a new node on the left half), the
+	 * bounding box widened, so the whole map jumped sideways — the root appeared to
+	 * leap to a new spot even though nothing had actually moved relative to it.
+	 *
+	 * Instead we keep the root where it already is, so adding nodes on either side
+	 * only extends outward and the existing layout stays visually still.
+	 */
+	const anchorId = primaryRoot(tree, nodes);
+	const anchorNode = anchorId ? byId.get(anchorId) : undefined;
+	const anchorPos = anchorId ? positioned.get(anchorId) : undefined;
+
+	if (anchorNode && anchorPos && Number.isFinite(anchorNode.position?.x)) {
+		const dx = anchorNode.position.x - anchorPos.x;
+		const dy = anchorNode.position.y - anchorPos.y;
+		if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+			for (const [id, p] of positioned) {
+				positioned.set(id, { x: p.x + dx, y: p.y + dy });
+			}
+		}
+	} else {
+		// no usable anchor (fresh map): fall back to bounding-box normalisation
+		let minX = Infinity;
+		let minY = Infinity;
+		for (const p of positioned.values()) {
+			minX = Math.min(minX, p.x);
+			minY = Math.min(minY, p.y);
+		}
+		if (Number.isFinite(minX)) {
+			for (const [id, p] of positioned) {
+				positioned.set(id, { x: p.x - minX, y: p.y - minY });
+			}
 		}
 	}
 

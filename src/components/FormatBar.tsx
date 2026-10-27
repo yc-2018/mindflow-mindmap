@@ -119,6 +119,11 @@ export default function FormatBar({ anchor, selection, onApply }: Props) {
 		</div>
 	);
 
+	// Guard against a missing body (SSR, or a portal rendered after unmount):
+	// createPortal throws "Cannot read properties of null (reading 'document')"
+	// when the container is gone.
+	if (typeof document === 'undefined' || !document.body) return null;
+
 	return createPortal(node, document.body);
 }
 
