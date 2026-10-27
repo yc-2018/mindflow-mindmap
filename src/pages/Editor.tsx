@@ -363,11 +363,13 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 				const handles = handlesFor(nodes, conn.source!, conn.target!, structure);
 				const next = addEdge({ ...conn, ...handles, type: 'mind', id: uid('e') }, edges);
 				setEdges(next);
-				setNodes((nds) => relayoutAll(nds, next, structure));
+				// linking two existing nodes must not re-flow the canvas; only update
+				// the child counts so the collapse badges stay accurate
+				setNodes((nds) => syncChildCounts(nds, next));
 			});
 			markDirty();
 		},
-		[nodes, edges, markDirty, withHistory, structure, relayout],
+		[nodes, edges, markDirty, withHistory, structure, syncChildCounts],
 	);
 
 	/**
@@ -514,9 +516,13 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 
 			const result = reparentMany(origin.edges, movingIds, target);
 			if (!result) {
-				// the move was rejected: re-lay-out so the dragged node snaps back
-				// to a legal spot (and drop any stale manual placement).
-				setNodes((nds) => relayoutAll(nds, origin.edges, structure));
+				// the move was rejected: put the dragged nodes back where they started
+				setNodes((nds) =>
+					nds.map((n) => {
+						const before = origin.nodes.find((o) => o.id === n.id);
+						return before && movingIds.includes(n.id) ? { ...n, position: before.position } : n;
+					}),
+				);
 				return;
 			}
 
@@ -525,10 +531,22 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			setEdges(nextEdges);
 			setNodes((nds) => {
 				const ordered = applySiblingOrder(nds, nextEdges);
-				// A structural move invalidates EVERY manual placement: the tree is
-				// about to be re-flowed, so leaving other nodes pinned would strand
-				// them away from their new neighbours.
-				return relayoutAll(ordered, nextEdges, structure);
+				/**
+				 * Re-parent ONE node, leave the rest of the canvas alone.
+				 *
+				 * The moved nodes are flagged `needsPlacement` so the incremental pass
+				 * computes a spot for just them; every other node keeps the position the
+				 * user already arranged.
+				 */
+				const staged = ordered.map((n) =>
+					movingIds.includes(n.id)
+						? { ...n, data: { ...n.data, pinned: false, needsPlacement: true } }
+						: n,
+				);
+				return layoutTree(staged, nextEdges, structure, {
+					keepPinned: true,
+					preserveExisting: true,
+				});
 			});
 			markDirty();
 
@@ -588,6 +606,8 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 					images: [],
 					uploading: 0,
 					childCount: 0,
+					// let the incremental layout position this node
+					needsPlacement: true,
 					...(side ? { side } : {}),
 				},
 				selected: true,
@@ -608,12 +628,16 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 					];
 					setEdges(nextEdges);
 					/**
-					 * Keep every existing placement; only the new node gets laid out.
+					 * Incremental placement: only the NEW node gets coordinates.
 					 *
-					 * A full `relayoutAll` here wiped all manual positions, so adding one
-					 * child rearranged the entire map — the reported "盘起来了".
+					 * `preserveExisting` leaves every node already on the canvas exactly
+					 * where it is, so adding one child never re-flows the map. That was
+					 * the "加一个节点整张图就盘起来" complaint.
 					 */
-					return layoutTree(nextNodes, nextEdges, structure, { keepPinned: true });
+					return layoutTree(nextNodes, nextEdges, structure, {
+						keepPinned: true,
+						preserveExisting: true,
+					});
 				});
 			});
 
@@ -737,14 +761,17 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 					const next = nds.map((n) =>
 						n.id === id ? { ...n, data: { ...n.data, collapsed: !n.data.collapsed } } : n,
 					);
-					// collapsing changes which nodes are visible, so a full re-flow is
-					// required (stale pinned spots would leave gaps or overlaps)
-					return relayoutAll(next, edges, structure);
+					// Collapsing only hides/shows nodes; it must not move the ones that
+					// stay visible. `preserveExisting` keeps every settled node put.
+					return layoutTree(next, edges, structure, {
+						keepPinned: true,
+						preserveExisting: true,
+					});
 				});
 			});
 			markDirty();
 		},
-		[edges, markDirty, readOnly, withHistory, structure, relayoutAll],
+		[edges, markDirty, readOnly, withHistory, structure],
 	);
 
 	const collapseAll = useCallback(() => {
@@ -756,27 +783,32 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 					...n,
 					data: { ...n.data, collapsed: (counts.get(n.id) ?? 0) > 0 && n.data.tone !== 'root' },
 				}));
-				return relayoutAll(next, edges, structure);
+				return layoutTree(next, edges, structure, {
+					keepPinned: true,
+					preserveExisting: true,
+				});
 			});
 		});
 		markDirty();
 		requestAnimationFrame(() => fitView({ padding: 0.3, duration: 300 }));
-	}, [edges, markDirty, readOnly, withHistory, structure, fitView, relayoutAll]);
+	}, [edges, markDirty, readOnly, withHistory, structure, fitView]);
 
 	const expandAll = useCallback(() => {
 		if (readOnly) return;
 		withHistory(() => {
-			setNodes((nds) =>
-				relayoutAll(
-					nds.map((n) => ({ ...n, data: { ...n.data, collapsed: false } })),
-					edges,
-					structure,
-				),
-			);
+			setNodes((nds) => {
+				const next = nds.map((n) => ({ ...n, data: { ...n.data, collapsed: false } }));
+				// Expanding can reveal nodes that were never positioned: the incremental
+				// pass gives those a spot without disturbing anything else.
+				return layoutTree(next, edges, structure, {
+					keepPinned: true,
+					preserveExisting: true,
+				});
+			});
 		});
 		markDirty();
 		requestAnimationFrame(() => fitView({ padding: 0.25, duration: 300 }));
-	}, [edges, markDirty, readOnly, withHistory, structure, fitView, relayoutAll]);
+	}, [edges, markDirty, readOnly, withHistory, structure, fitView]);
 
 	useEffect(() => {
 		const onToggle = (e: Event) => {
@@ -787,10 +819,21 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 		return () => window.removeEventListener(TOGGLE_COLLAPSE_EVENT, onToggle);
 	}, [toggleCollapse]);
 
-	// relayout after a label change, since text height drives the tree spacing
+	/**
+	 * After a label edit, only nudge spacing if the text got much taller.
+	 *
+	 * Previously every label commit re-flowed the whole map, so typing a longer
+	 * title shuffled every node. Now the map stays put; nodes that would overlap
+	 * are the only thing the incremental pass touches.
+	 */
 	useEffect(() => {
 		const onCommit = () => {
-			setNodes((nds) => layoutTree(nds, latest.current.edges, latest.current.structure));
+			setNodes((nds) =>
+				layoutTree(nds, latest.current.edges, latest.current.structure, {
+					keepPinned: true,
+					preserveExisting: true,
+				}),
+			);
 		};
 		window.addEventListener(LABEL_COMMIT_EVENT, onCommit);
 		return () => window.removeEventListener(LABEL_COMMIT_EVENT, onCommit);
@@ -804,7 +847,8 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			withHistory(() => {
 				setEdges((eds) => {
 					const next = eds.filter((edge) => edge.id !== detail.id);
-					setNodes((nds) => relayoutAll(nds, next, latest.current.structure));
+					// Removing a connector must not move the nodes around it.
+					setNodes((nds) => syncChildCounts(nds, next));
 					return next;
 				});
 			});

@@ -663,25 +663,181 @@ function layoutFishbone(
 }
 
 /**
+ * Position ONLY the nodes that have no usable position yet.
+ *
+ * Every node that already has finite coordinates is left untouched, so adding or
+ * deleting a single node never disturbs the rest of the map. This is the whole
+ * point of the incremental path: a mind map is a canvas the user has arranged,
+ * not a document that re-flows on every keystroke.
+ *
+ * A "new" node is placed next to its parent, on the side implied by the current
+ * structure (and by the parent's own side in the two-sided layouts). If its
+ * preferred spot is occupied, it is pushed along the sibling axis until free.
+ */
+function layoutIncremental(
+	nodes: MindNode[],
+	edges: Edge[],
+	structure: StructureId,
+): MindNode[] {
+	const tree = buildTree(nodes, edges);
+	const byId = new Map(nodes.map((n) => [n.id, n]));
+	const sid = getStructure(structure);
+	const vertical = sid === 'down' || sid === 'up';
+	void tree;
+
+	/** Nodes that already sit somewhere real. */
+	const settled = nodes.filter(
+		(n) =>
+			Number.isFinite(n.position?.x) &&
+			Number.isFinite(n.position?.y) &&
+			// a node explicitly marked `needsPlacement` is treated as new
+			n.data?.needsPlacement !== true,
+	);
+	const settledIds = new Set(settled.map((n) => n.id));
+
+	// occupied boxes, used to avoid dropping a new node on top of another.
+	// This list grows as we place nodes, so several new siblings added in one go
+	// also avoid each other (not just the already-settled nodes).
+	const taken = settled.map((n) => ({
+		x: n.position.x,
+		y: n.position.y,
+		w: NODE_WIDTH,
+		h: estimateHeight(n),
+	}));
+
+	const overlapsTaken = (x: number, y: number, h: number): boolean =>
+		taken.some(
+			(b) => !(x + NODE_WIDTH <= b.x || b.x + b.w <= x || y + h <= b.y || b.y + b.h <= y),
+		);
+
+	const placed = new Map<string, { x: number; y: number }>();
+
+	/** Distance for one step along the depth axis. */
+	const depthStep = (): number => (vertical ? 96 : NODE_WIDTH + 76);
+
+	/** Distance for one step along the sibling axis. */
+	const siblingStep = (node: MindNode): number =>
+		vertical ? NODE_WIDTH + 56 : estimateHeight(node) + 22;
+
+	/**
+	 * Place a single node relative to its parent, nudging along the sibling axis
+	 * until it does not collide with an already-settled node.
+	 */
+	const placeOne = (node: MindNode): { x: number; y: number } => {
+		const parentId = parentOf(edges, node.id);
+		const parent = parentId ? byId.get(parentId) : undefined;
+		const parentPos = parent
+			? (placed.get(parent.id) ?? { x: parent.position.x, y: parent.position.y })
+			: undefined;
+
+		if (!parent || !parentPos) {
+			// no parent: drop it to the right of everything, clear of the map
+			const maxRight = taken.reduce((m, b) => Math.max(m, b.x + b.w), 0);
+			return { x: maxRight + 60, y: 0 };
+		}
+
+		// which side does this child belong on?
+		let dir: Direction = 'right';
+		if (vertical) {
+			dir = sid === 'down' ? 'down' : 'up';
+		} else if (sid === 'both' || sid === 'fishbone') {
+			const side = node.data?.side ?? (node.position.x < parentPos.x ? 'left' : 'right');
+			dir = side === 'left' ? 'left' : 'right';
+		} else if (sid === 'left') {
+			dir = 'left';
+		}
+
+		const sign = dir === 'left' || dir === 'up' ? -1 : 1;
+		const h = estimateHeight(node);
+
+		// first choice: straight out from the parent along the depth axis
+		let x = parentPos.x + (vertical ? 0 : sign * depthStep());
+		let y = parentPos.y + (vertical ? sign * depthStep() : 0);
+
+		// nudge along the sibling axis until the spot is free
+		let guard = 0;
+		while (overlapsTaken(x, y, h) && guard < 60) {
+			if (vertical) x += siblingStep(node);
+			else y += siblingStep(node);
+			guard++;
+		}
+
+		return { x, y };
+	};
+
+	// place the missing ones; children may need their parent placed first
+	const pending = nodes.filter((n) => !settledIds.has(n.id));
+	const done = new Set<string>();
+
+	let passes = 0;
+	while (pending.length && passes < 10) {
+		passes++;
+		let progress = false;
+		for (const node of pending) {
+			if (done.has(node.id)) continue;
+			const parentId = parentOf(edges, node.id);
+			// wait until the parent has a position (or has no parent)
+			if (parentId && !settledIds.has(parentId) && !placed.has(parentId)) continue;
+			const pos = placeOne(node);
+			placed.set(node.id, pos);
+			taken.push({ x: pos.x, y: pos.y, w: NODE_WIDTH, h: estimateHeight(node) });
+			done.add(node.id);
+			progress = true;
+		}
+		if (!progress) break;
+	}
+	// anything still pending had a missing ancestor; place it anyway
+	for (const node of pending) {
+		if (done.has(node.id)) continue;
+		const pos = placeOne(node);
+		placed.set(node.id, pos);
+		taken.push({ x: pos.x, y: pos.y, w: NODE_WIDTH, h: estimateHeight(node) });
+	}
+
+	const laidOut = nodes.map((n) => {
+		const p = placed.get(n.id);
+		if (!p) return n;
+		// clear the "needs placement" marker once the node has a real spot
+		const data = n.data?.needsPlacement
+			? { ...n.data, needsPlacement: false }
+			: n.data;
+		return { ...n, position: p, data };
+	});
+
+	return syncTones(laidOut, edges);
+}
+
+/**
  * Layout the whole map using the chosen structure.
  *
  * `structure` defaults to the classic left-to-right mind map, so existing
  * documents render exactly as before.
  *
- * `options.keepPinned` (default true) preserves nodes the user dragged to a
- * custom spot. Explicit "整理布局" / structure switches pass `false` so the layout
- * can actually rearrange everything — otherwise a map full of accidentally
- * pinned nodes would ignore the button entirely.
+ * Options:
+ *  - `keepPinned` (default true): honour nodes the user dragged to a custom spot.
+ *  - `preserveExisting` (default false): keep EVERY existing node exactly where
+ *    it is and only position nodes that have no usable position yet.
+ *
+ * `preserveExisting` is what incremental edits (add / delete one node) need:
+ * recomputing the whole tree on every small change made the map visibly jump
+ * around, which is the "加了/删了一个节点整张图就盘起来" complaint. With it on,
+ * editing only touches the nodes that are actually new.
  */
 export function layoutTree(
 	nodes: MindNode[],
 	edges: Edge[],
 	structure: StructureId = DEFAULT_STRUCTURE,
-	options: { keepPinned?: boolean } = {},
+	options: { keepPinned?: boolean; preserveExisting?: boolean } = {},
 ): MindNode[] {
 	if (!nodes.length) return nodes;
 
 	const keepPinned = options.keepPinned !== false;
+	const preserveExisting = options.preserveExisting === true;
+
+	if (preserveExisting) {
+		return layoutIncremental(nodes, edges, structure);
+	}
+
 	const tree = buildTree(nodes, edges);
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 	const sid = getStructure(structure);

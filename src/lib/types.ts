@@ -51,6 +51,13 @@ export interface MindNodeData extends Record<string, unknown> {
 	 * auto-layout, so free dragging and structural snapping can coexist.
 	 */
 	pinned?: boolean;
+	/**
+	 * True when this node still needs a position from the incremental layout.
+	 *
+	 * Used by re-parenting: the moved node is marked, every other node keeps its
+	 * place, and the layout only computes a spot for the marked ones.
+	 */
+	needsPlacement?: boolean;
 }
 
 export type MindNode = Node<MindNodeData, 'mind'>;
