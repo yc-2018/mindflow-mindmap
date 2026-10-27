@@ -22,14 +22,15 @@ import {
 	ChevronRight,
 	ChevronsDownUp,
 	ChevronsUpDown,
+	CornerDownRight,
 	ImagePlus,
 	LayoutGrid,
 	Maximize2,
 	Minimize2,
 	Plus,
 	Redo2,
-	Scissors,
 	Trash2,
+	TriangleAlert,
 	Undo2,
 	X,
 } from 'lucide-react';
@@ -88,10 +89,16 @@ interface LightboxState {
 	alt: string;
 }
 
-/** Which node the pointer is over during a drag, plus where inside it. */
+/**
+ * What a drop would do, resolved from the pointer position.
+ *
+ * `forbidden` means the drop is refused: the node goes back where it started.
+ * It is used when hovering the root's outer bands, where "become a sibling of
+ * the root" would really mean detaching — which is no longer allowed.
+ */
 interface DropHint {
 	id: string;
-	mode: 'child' | 'sibling-before' | 'sibling-after' | 'detach';
+	mode: 'child' | 'sibling-before' | 'sibling-after' | 'forbidden';
 }
 
 function EditorInner({ mapId, readOnly = false }: EditorProps) {
@@ -108,10 +115,6 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	const [fullscreen, setFullscreen] = useState(false);
 	const [uploadingCount, setUploadingCount] = useState(0);
 	const [dropHint, setDropHint] = useState<DropHint | null>(null);
-	/** True while the pointer sits in the right-edge detach strip. */
-	const [detachZoneActive, setDetachZoneActive] = useState(false);
-	/** True for the duration of a node drag (drives the strip's visibility). */
-	const [dragging, setDragging] = useState(false);
 	/**
 	 * Mirror of `dropHint` kept in a ref.
 	 *
@@ -121,28 +124,15 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	 */
 	const dropHintRef = useRef<DropHint | null>(null);
 	const canvasRef = useRef<HTMLDivElement | null>(null);
-
 	/**
-	 * Width of the detach strip on the right edge of the canvas.
+	 * Id of the map's primary root.
 	 *
-	 * Dropping here is the only way to break a node out of the tree, which makes
-	 * the action deliberate instead of an accidental side effect of dragging into
-	 * empty space.
+	 * Needed during a drag: the root has no parent, so dropping on its outer bands
+	 * cannot mean "become a sibling of the root" — that is reported as forbidden.
 	 */
-	const DETACH_ZONE_W = 132;
-
-	/** Is a SCREEN point inside the right-edge detach strip? */
-	const isInDetachZone = useCallback(
-		(point: { x: number; y: number }): boolean => {
-			const canvas = canvasRef.current;
-			if (!canvas) return false;
-			const r = canvas.getBoundingClientRect();
-			const inStrip = point.x >= r.right - DETACH_ZONE_W && point.x <= r.right;
-			const inHeight = point.y >= r.top && point.y <= r.bottom;
-			return inStrip && inHeight;
-		},
-		[],
-	);
+	const rootIdRef = useRef<string | null>(null);
+	/** True while the ROOT itself is being dragged (drives the warning wording). */
+	const draggingRootRef = useRef(false);
 
 	const { fitView, getViewport, screenToFlowPosition } = useReactFlow();
 	const fileRef = useRef<HTMLInputElement | null>(null);
@@ -384,7 +374,6 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	// ---- drag to reparent / reorder ----
 	const onNodeDragStart = useCallback(
 		(_event: MouseEvent | TouchEvent, node: MindNode) => {
-			setDragging(true);
 			dragOrigin.current = {
 				// clone so later state updates can never mutate the snapshot
 				nodes: latest.current.nodes.map((n) => ({ ...n, data: { ...n.data } })),
@@ -457,17 +446,27 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			}
 
 			/**
-			 * Detach zone: a dedicated strip pinned to the RIGHT edge of the canvas.
+			 * Two cases are refused outright, and both show a RED warning so the
+			 * user learns the rule before releasing:
 			 *
-			 * Replacing the old "far from everything" rule: dropping in open space
-			 * now simply keeps the node where you put it, and the ONLY way to break a
-			 * node out of the tree is to drag it into this strip. That makes the
-			 * action explicit instead of an accident.
+			 * 1. dropping ON the root's outer bands — the root has no parent, so
+			 *    "become its sibling" would silently detach the node;
+			 * 2. dragging the ROOT itself onto any other node — a root has no parent
+			 *    by definition, and attaching it would create a cycle.
 			 */
-			const inDetachZone = !hit && isInDetachZone(point);
-			const next: DropHint | null = hit ?? (inDetachZone ? { id: '', mode: 'detach' } : null);
+			const draggingRoot = movingSet.has(rootIdRef.current ?? '');
+			draggingRootRef.current = draggingRoot;
+			if (hit) {
+				const onRootBands =
+					hit.id === rootIdRef.current &&
+					(hit.mode === 'sibling-before' || hit.mode === 'sibling-after');
+				if (draggingRoot || onRootBands) {
+					hit = { id: '', mode: 'forbidden' };
+				}
+			}
 
-			setDetachZoneActive(inDetachZone);
+			const next: DropHint | null = hit;
+
 			dropHintRef.current = next;
 			setDropHint(next);
 		},
@@ -482,13 +481,38 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			const hint = dropHintRef.current;
 			dropHintRef.current = null;
 			setDropHint(null);
-			setDetachZoneActive(false);
-			setDragging(false);
 
 			if (!origin || readOnly) return;
 
 			const movingIds = dragIdsRef.current.length ? dragIdsRef.current : [dragged.id];
 			dragIdsRef.current = [];
+
+			/** Put the dragged nodes back exactly where the gesture started. */
+			const restore = () => {
+				setNodes((nds) =>
+					nds.map((n) => {
+						const before = origin.nodes.find((o) => o.id === n.id);
+						return before && movingIds.includes(n.id) ? { ...n, position: before.position } : n;
+					}),
+				);
+			};
+
+			/**
+			 * Forbidden drop: refuse it and snap back.
+			 *
+			 * Covers both the root's outer bands (no siblings to insert next to) and
+			 * dragging the root itself onto another node (would create a cycle). The
+			 * user sees a red warning while hovering, then the node returns home.
+			 */
+			if (hint && hint.mode === 'forbidden') {
+				restore();
+				const wasRoot = movingIds.includes(rootIdRef.current ?? '');
+				toast(
+					wasRoot ? '根节点不能挂到其他节点上' : '这个位置不能放，节点已放回原位',
+					'error',
+				);
+				return;
+			}
 
 			/**
 			 * No snap target: the user simply moved the node somewhere on the canvas.
@@ -509,20 +533,20 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			}
 
 			// NOTE: DropHint uses `id`; reparentMany expects `hoveredId` — map it.
+			// `forbidden` already returned above, so the mode is a real drop mode here.
 			const target =
-				hint.mode === 'detach'
-					? { mode: 'detach' as const, hoveredId: undefined }
-					: { mode: hint.mode, hoveredId: hint.id };
+				hint.mode === 'forbidden'
+					? null
+					: { mode: hint.mode as 'child' | 'sibling-before' | 'sibling-after', hoveredId: hint.id };
+			if (!target) {
+				restore();
+				return;
+			}
 
 			const result = reparentMany(origin.edges, movingIds, target);
 			if (!result) {
-				// the move was rejected: put the dragged nodes back where they started
-				setNodes((nds) =>
-					nds.map((n) => {
-						const before = origin.nodes.find((o) => o.id === n.id);
-						return before && movingIds.includes(n.id) ? { ...n, position: before.position } : n;
-					}),
-				);
+				restore();
+				toast('这个位置放不了，节点已放回原位', 'error');
 				return;
 			}
 
@@ -552,8 +576,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 
 			const count = movingIds.length;
 			const suffix = count > 1 ? `（${count} 个主题）` : '';
-			if (target.mode === 'detach') toast(`已脱离为独立分支${suffix}`, 'success');
-			else if (target.mode === 'child') toast(`已改为子主题${suffix}`, 'success');
+			if (target.mode === 'child') toast(`已改为子主题${suffix}`, 'success');
 			else toast(`已调整同级顺序${suffix}`, 'success');
 		},
 		[readOnly, structure, relayout, markDirty, history],
@@ -1152,12 +1175,22 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	// paint is already routed correctly (before the sync effect runs)
 	const view = useMemo(() => {
 		const visible = visibleGraph(nodes, edges);
+		// remember which node is the primary root; the drag handler needs it to
+		// distinguish "drop on the root's edge" (detach) from "become its child"
+		rootIdRef.current =
+			visible.nodes.find((n) => n.data.tone === 'root')?.id ??
+			visible.nodes[0]?.id ??
+			null;
 		const routed = withAdaptiveHandles(visible.nodes, visible.edges, structure);
-		// mark the node the pointer is hovering so it can show a drop highlight
-		const hoveredId = dropHint && dropHint.mode !== 'detach' ? dropHint.id : null;
-		// 'detach' has no target node, so the highlight type excludes it
+		/**
+		 * Highlight the node under the pointer.
+		 *
+		 * `forbidden` has no target node, so nothing lights up — the red warning
+		 * banner carries the message instead.
+		 */
+		const hoveredId = dropHint && dropHint.mode !== 'forbidden' ? dropHint.id : null;
 		const dropMode: 'child' | 'sibling-before' | 'sibling-after' | null =
-			dropHint && dropHint.mode !== 'detach' ? dropHint.mode : null;
+			dropHint && dropHint.mode !== 'forbidden' ? dropHint.mode : null;
 		const marked = hoveredId
 			? visible.nodes.map((n) =>
 					n.id === hoveredId
@@ -1389,23 +1422,6 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 						</Panel>
 					</ReactFlow>
 
-					{/*
-					  Detach strip: a dedicated drop zone pinned to the right edge.
-					  It only becomes visible (and only accepts a drop) while a node is
-					  being dragged, so it never clutters the normal editing view.
-					*/}
-					<div
-						className={`detach-zone${dragging ? ' is-visible' : ''}${
-							detachZoneActive ? ' is-active' : ''
-						}`}
-						aria-hidden={!detachZoneActive}
-					>
-						<span className="detach-zone__icon">
-							<Scissors size={16} strokeWidth={2} />
-						</span>
-						<span className="detach-zone__label">拖到此处脱离</span>
-					</div>
-
 					{/* floating action bar when several nodes are selected */}
 					{selectedNodes.length > 1 ? (
 						<div className="multi-bar">
@@ -1429,14 +1445,34 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 
 					{/* drop indicator while dragging a node near another */}
 					{dropHint ? (
-						<div className={`drop-hint drop-hint--${dropHint.mode}`}>
-							{dropHint.mode === 'child'
-								? '松手成为子主题'
-								: dropHint.mode === 'sibling-before'
-									? '松手插入到此主题之前'
-									: dropHint.mode === 'sibling-after'
-										? '松手插入到此主题之后'
-										: '松手脱离为独立分支'}
+						<div
+							className={`drop-hint drop-hint--${dropHint.mode}${
+								dropHint.mode === 'forbidden' ? ' is-warning' : ''
+							}`}
+						>
+							{dropHint.mode === 'child' ? (
+								<>
+									<CornerDownRight size={13} strokeWidth={2.2} />
+									松手成为子主题
+								</>
+							) : dropHint.mode === 'sibling-before' ? (
+								<>
+									<CornerDownRight size={13} strokeWidth={2.2} />
+									松手插入到此主题之前
+								</>
+							) : dropHint.mode === 'sibling-after' ? (
+								<>
+									<CornerDownRight size={13} strokeWidth={2.2} />
+									松手插入到此主题之后
+								</>
+							) : (
+								<>
+									<TriangleAlert size={13} strokeWidth={2.2} />
+									{draggingRootRef.current
+										? '根节点不能挂到其他节点上'
+										: '根节点没有兄弟，不能放在这里'}
+								</>
+							)}
 						</div>
 					) : null}
 				</div>

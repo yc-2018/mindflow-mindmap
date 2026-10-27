@@ -8,12 +8,16 @@ import { childrenOf, isAncestor, parentOf } from './layout';
  * The drop target is decided by comparing the dragged node's centre against the
  * hovered node's box: the middle band means "become a child", the upper/lower
  * bands mean "become a sibling before/after it".
+ *
+ * There is deliberately NO 'detach' mode: a node cannot be pulled out of the
+ * tree by dragging. Dropping somewhere that cannot accept it simply puts the node
+ * back where it started.
  */
-export type DropMode = 'child' | 'sibling-before' | 'sibling-after' | 'detach';
+export type DropMode = 'child' | 'sibling-before' | 'sibling-after';
 
 export interface DropTarget {
 	mode: DropMode;
-	/** Node under the cursor (absent when dropped on empty canvas). */
+	/** Node under the cursor. */
 	hoveredId?: string;
 }
 
@@ -40,17 +44,6 @@ export function resolveDropMode(rel: number): DropMode {
  */
 export const DROP_MARGIN = 28;
 
-/**
- * How far outside the map's overall bounding box the pointer must be before a
- * drop means "detach".
- *
- * Detaching must be deliberate. Mind maps have large gaps between nodes, so a
- * "distance to the nearest node" rule fires far too easily — that is exactly why
- * a small nudge used to break the tree. Instead we require the pointer to leave
- * the whole map area (plus this margin), which reads as "drag to the edge".
- */
-export const DETACH_EDGE_MARGIN = 90;
-
 /** Does the pointer sit inside the node's box, padded by `margin`? */
 export function insideBox(
 	pointer: { x: number; y: number },
@@ -73,32 +66,6 @@ export function distanceToBox(
 	const dx = Math.max(box.x - pointer.x, 0, pointer.x - (box.x + box.w));
 	const dy = Math.max(box.y - pointer.y, 0, pointer.y - (box.y + box.h));
 	return Math.hypot(dx, dy);
-}
-
-/**
- * Decide whether a drop at `pointer` should detach the dragged node.
- *
- * Only true when the pointer has left the map's overall bounding box by at least
- * DETACH_EDGE_MARGIN — i.e. the user deliberately dragged out to the edge.
- * A casual nudge inside the map never detaches.
- */
-export function shouldDetach(
-	pointer: { x: number; y: number },
-	boxes: { x: number; y: number; w: number; h: number }[],
-): boolean {
-	if (!boxes.length) return false;
-	const minX = Math.min(...boxes.map((b) => b.x));
-	const minY = Math.min(...boxes.map((b) => b.y));
-	const maxX = Math.max(...boxes.map((b) => b.x + b.w));
-	const maxY = Math.max(...boxes.map((b) => b.y + b.h));
-
-	const m = DETACH_EDGE_MARGIN;
-	return (
-		pointer.x < minX - m ||
-		pointer.x > maxX + m ||
-		pointer.y < minY - m ||
-		pointer.y > maxY + m
-	);
 }
 
 /**
@@ -151,19 +118,9 @@ export function reparentMany(
 
 	// never allow moving a node onto its own descendant / itself
 	const hoveredId = target.hoveredId;
-	if (target.mode !== 'detach' && hoveredId) {
+	if (hoveredId) {
 		if (moving.includes(hoveredId)) return null;
 		if (moving.some((id) => isAncestor(edges, id, hoveredId))) return null;
-	}
-
-	if (target.mode === 'detach') {
-		// keep only nodes that actually have a parent
-		const withParent = moving.filter((id) => Boolean(parentOf(edges, id)));
-		if (!withParent.length) return null;
-		return {
-			edges: edges.filter((e) => !withParent.includes(e.target)),
-			order: 0,
-		};
 	}
 
 	if (!hoveredId) return null;
@@ -184,9 +141,16 @@ export function reparentMany(
 	// sibling before/after: insert the whole batch next to the hovered node
 	const newParent = parentOf(edges, hoveredId);
 	if (!newParent) {
-		// hovered node is a root: the batch becomes roots too
-		const without = edges.filter((e) => !moving.includes(e.target));
-		return { edges: without, order: target.mode === 'sibling-before' ? -1 : 1 };
+		/**
+		 * The hovered node is a ROOT, so it has no siblings to insert next to.
+		 *
+		 * The old code silently turned the batch into roots here — which looked
+		 * like "become a sibling of the root" but actually DETACHED the node. That
+		 * mismatch is what confused users, so we refuse the move outright. The
+		 * editor surfaces it as "the root has no siblings"; detaching is only
+		 * possible through the explicit detach action.
+		 */
+		return null;
 	}
 
 	// take the parent's children from the ORIGINAL list (which still has the

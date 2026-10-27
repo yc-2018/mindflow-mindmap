@@ -269,16 +269,17 @@ function layoutDirected(
 		return extent;
 	};
 
-	const roots = rootsOverride ?? tree.roots;
+	/**
+	 * Only lay out the PRIMARY root's tree here.
+	 *
+	 * `tree.roots` also contains detached nodes (any node without a parent). If we
+	 * place them too, they end up stacked in the same column as the real root —
+	 * the "整理布局 缩成一团" pile. They are handed to `placeLeftovers` instead,
+	 * which lays each detached branch out as its own small map to the right.
+	 */
+	const primary = primaryRoot(tree, nodes);
+	const roots: string[] = rootsOverride ?? (primary ? [primary] : []);
 	for (const r of roots) measure(r, 0, new Set());
-
-	// any node not reached becomes its own root
-	for (const n of nodes) {
-		if (!visited.has(n.id)) {
-			roots.push(n.id);
-			measure(n.id, 0, new Set());
-		}
-	}
 
 	const placed = new Map<string, { x: number; y: number }>();
 
@@ -324,6 +325,9 @@ function layoutDirected(
 		cursor += (extents.get(r) ?? 60) + geo.siblingStep * 3;
 	}
 
+	// detached branches get their own row, right of the main map
+	placeLeftovers(nodes, tree, placed);
+
 	return placed;
 }
 
@@ -331,38 +335,59 @@ function layoutDirected(
  * Pick the map's PRIMARY root.
  *
  * `tree.roots[0]` is just the first parentless node in declaration order, which
- * can easily be a detached node that happens to come first. Structures like the
- * fishbone then treat that orphan as the "head" and squeeze the real tree into
- * the leftovers grid.
+ * can easily be a detached node that happens to come first.
  *
- * So we choose the root whose subtree contains the most nodes — the actual
- * centre of the map. Ties fall back to declaration order.
+ * Priority:
+ *  1. a node explicitly carrying `tone: 'root'` — that is the real centre of the
+ *     map, set when the document was created and preserved by `syncTones`
+ *  2. the root whose subtree contains the most nodes
+ *
+ * Rule 1 matters because "most nodes" alone is wrong: a detached branch with
+ * three children outvoted the actual root with two, so 整理布局 treated the
+ * detached branch as the centre and piled everything around it — the reported
+ * "脱离的节点变成根节点, 整理布局就缩成一团".
  */
 function primaryRoot(tree: Tree, nodes: MindNode[]): string | undefined {
 	if (!tree.roots.length) return undefined;
-	const sizeOf = new Map<string, number>();
 
-	const count = (id: string, stack: Set<string>): number => {
-		if (stack.has(id)) return 0;
-		stack.add(id);
-		let n = 1;
-		for (const k of tree.children.get(id) ?? []) n += count(k, stack);
-		stack.delete(id);
-		return n;
-	};
+	// 1. explicit root marker
+	const marked = tree.roots.filter((r) => nodes.find((n) => n.id === r)?.data?.tone === 'root');
+	if (marked.length) {
+		// if several are marked (rare), take the biggest one
+		if (marked.length === 1) return marked[0];
+		let bestMarked = marked[0];
+		let bestMarkedSize = -1;
+		for (const r of marked) {
+			const size = subtreeSize(tree, r);
+			if (size > bestMarkedSize) {
+				bestMarkedSize = size;
+				bestMarked = r;
+			}
+		}
+		return bestMarked;
+	}
 
+	// 2. fall back to the largest subtree
 	let best = tree.roots[0];
 	let bestSize = -1;
 	for (const r of tree.roots) {
-		const size = count(r, new Set());
-		sizeOf.set(r, size);
+		const size = subtreeSize(tree, r);
 		if (size > bestSize) {
 			bestSize = size;
 			best = r;
 		}
 	}
-	void nodes;
 	return best;
+}
+
+/** How many nodes live in the subtree rooted at `id` (inclusive). */
+function subtreeSize(tree: Tree, id: string, stack = new Set<string>()): number {
+	if (stack.has(id)) return 0;
+	stack.add(id);
+	let n = 1;
+	for (const k of tree.children.get(id) ?? []) n += subtreeSize(tree, k, stack);
+	stack.delete(id);
+	return n;
 }
 
 /**
@@ -374,6 +399,19 @@ function primaryRoot(tree: Tree, nodes: MindNode[]): string | undefined {
  * them in a tidy grid below everything else, each keeping its own subtree.
  *
  * Mutates `placed` and returns it for convenience.
+ */
+/**
+ * Place subtrees that the main layout did not reach — detached nodes and their
+ * descendants.
+ *
+ * These used to be dropped into a grid whose first cell sat at x = 0, i.e. the
+ * SAME column as the main root. With one root that never showed, but as soon as
+ * a node was detached the map became a narrow vertical pile: the detached
+ * subtrees stacked directly under the root ("整理布局 缩成一团").
+ *
+ * Now they are laid out as proper little mind maps, in a row BELOW the main map,
+ * each growing to the right and separated horizontally. That keeps the whole map
+ * wide and readable no matter how many detached branches exist.
  */
 function placeLeftovers(
 	nodes: MindNode[],
@@ -394,41 +432,87 @@ function placeLeftovers(
 	}
 	const orphanRoots = leftovers.filter((n) => !hasParentInside.has(n.id));
 
-	// start below whatever is already placed so the grid never overlaps
-	let lowest = 0;
-	for (const p of placed.values()) lowest = Math.max(lowest, p.y);
-	const startY = lowest + 90;
-
-	const COLS = 4;
-	const COL_W = NODE_WIDTH + 56;
-	const ROW_H = 110;
-
-	/** Vertical stack for one orphan subtree; returns the y after its last node. */
-	const placeStack = (id: string, x: number, y: number): number => {
-		const node = byId.get(id);
-		if (!node) return y;
-		const h = slotHeight(node);
-		placed.set(id, { x, y });
-		let nextY = y + h + 16;
-		for (const k of tree.children.get(id) ?? []) {
-			nextY = placeStack(k, x + 24, nextY); // slight indent for children
+	// Start BELOW and to the RIGHT of whatever is already placed.
+	//
+	// The main layout's coordinates are relative to its own root, so a detached
+	// subtree placed at the main map's left edge ended up in the same column as
+	// the root — which is exactly the "缩成一团" pile. Anchoring to the right of
+	// the main map keeps the result wide.
+	let maxY = 0;
+	let maxX = 0;
+	let minX = 0;
+	let have = false;
+	for (const p of placed.values()) {
+		if (!have) {
+			maxY = p.y;
+			maxX = p.x;
+			minX = p.x;
+			have = true;
+			continue;
 		}
-		return nextY;
+		maxY = Math.max(maxY, p.y);
+		maxX = Math.max(maxX, p.x);
+		minX = Math.min(minX, p.x);
+	}
+
+	const GAP_Y = 150; // between the main map and the row of detached branches
+	const GAP_X = 90; // between two detached subtrees
+	const CHILD_GAP = 24; // between siblings inside one detached subtree
+	const DEPTH = NODE_WIDTH + 76;
+
+	const kidsOf = (id: string) => (tree.children.get(id) ?? []).filter((k) => leftoverSet.has(k));
+
+	/** How many levels the subtree under `id` has (0 = leaf). */
+	const depthOf = (id: string): number => {
+		const kids = kidsOf(id);
+		if (!kids.length) return 0;
+		return 1 + Math.max(...kids.map(depthOf));
 	};
 
-	let col = 0;
-	let row = 0;
-	for (const root of orphanRoots) {
-		const endY = placeStack(root.id, col * COL_W, startY + row * ROW_H);
-		col += 1;
-		if (col >= COLS) {
-			col = 0;
-			row += 1;
-		} else if (endY > startY + (row + 1) * ROW_H) {
-			// a tall stack consumes extra rows so the next cell cannot collide
-			row += Math.ceil((endY - startY) / ROW_H) - row;
-			col = 0;
+	/** Total height of the subtree under `id`. */
+	const heightOf = (id: string): number => {
+		const node = byId.get(id);
+		if (!node) return 0;
+		const kids = kidsOf(id);
+		const self = slotHeight(node);
+		if (!kids.length) return self;
+		let sum = 0;
+		for (const k of kids) sum += heightOf(k) + CHILD_GAP;
+		return Math.max(self, sum - CHILD_GAP);
+	};
+
+	/** Lay out one subtree growing to the right, centred on its own band. */
+	const placeSubtree = (id: string, x: number, yTop: number): void => {
+		const node = byId.get(id);
+		if (!node) return;
+		const h = heightOf(id);
+		placed.set(id, { x, y: yTop + (h - slotHeight(node)) / 2 });
+
+		const kids = kidsOf(id);
+		if (!kids.length) return;
+		let childY = yTop;
+		for (const k of kids) {
+			placeSubtree(k, x + DEPTH, childY);
+			childY += heightOf(k) + CHILD_GAP;
 		}
+	};
+
+	const MAX_ROW_W = 2600;
+	let cursorX = maxX + GAP_X;
+	let rowTop = maxY + GAP_Y;
+	let rowHeight = 0;
+
+	for (const root of orphanRoots) {
+		const w = NODE_WIDTH + depthOf(root.id) * DEPTH;
+		// wrap only when this is not the first subtree of the row
+		if (cursorX > maxX + GAP_X && cursorX + w - (maxX + GAP_X) > MAX_ROW_W) {
+			rowTop += rowHeight + GAP_Y;
+			cursorX = maxX + GAP_X;
+			rowHeight = 0;
+		}
+		placeSubtree(root.id, cursorX, rowTop);
+		rowHeight = Math.max(rowHeight, heightOf(root.id));
+		cursorX += w + GAP_X;
 	}
 
 	return placed;

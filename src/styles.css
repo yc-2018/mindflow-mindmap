@@ -1256,6 +1256,9 @@ select {
 	bottom: 62px;
 	left: 50%;
 	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
+	gap: 6px;
 	background: #232a3a;
 	color: #fff;
 	border-radius: 8px;
@@ -1272,6 +1275,12 @@ select {
 .drop-hint--sibling-before,
 .drop-hint--sibling-after {
 	background: #0f766e;
+}
+/* Detaching removes the node from the tree, so it reads as a warning, not a
+   neutral action. */
+.drop-hint.is-warning {
+	background: var(--danger);
+	box-shadow: 0 4px 18px rgba(229, 72, 77, 0.4);
 }
 
 /* vertical handles for top-down / bottom-up structures */
