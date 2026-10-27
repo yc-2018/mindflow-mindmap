@@ -21,6 +21,7 @@ import {
 	ChevronLeft,
 	ChevronRight,
 	ChevronsDownUp,
+	ChevronsUpDown,
 	ImagePlus,
 	LayoutGrid,
 	Maximize2,
@@ -983,6 +984,23 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	}, [nodes, edges, structure, dropHint]);
 
 	const stats = useMemo(() => ({ nodes: nodes.length, edges: edges.length }), [nodes, edges]);
+
+	/**
+	 * Drive the collapse/expand pair's enabled state.
+	 *
+	 * "全部折叠" is pointless when nothing has children (or everything is already
+	 * collapsed); "全部展开" is pointless when nothing is collapsed. Grey them out
+	 * instead of letting the user click a no-op.
+	 */
+	const collapseState = useMemo(() => {
+		const counts = childCounts(nodes, edges);
+		const withChildren = nodes.filter((n) => (counts.get(n.id) ?? 0) > 0);
+		const collapsed = withChildren.filter((n) => n.data.collapsed);
+		return {
+			hasExpandable: withChildren.length > collapsed.length,
+			hasCollapsed: collapsed.length > 0,
+		};
+	}, [nodes, edges]);
 	const selectedNodes = nodes.filter((n) => n.selected);
 	const current = lightbox ? lightbox.images[lightbox.index] : null;
 
@@ -1061,15 +1079,28 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 							整理布局
 						</button>
 
-						<button
-							className="btn-ghost btn-icon-text"
-							onClick={collapseAll}
-							title="折叠所有分支，只看主干"
-							disabled={readOnly}
-						>
-							<ChevronsDownUp size={15} strokeWidth={1.9} />
-							全部折叠
-						</button>
+						{/* Collapse / expand pair: they belong together, so group them
+						    like the undo/redo pair instead of offering only one. */}
+						<div className="editor__pair">
+							<button
+								className="btn-ghost btn-icon-text"
+								onClick={collapseAll}
+								title="折叠所有分支，只看主干"
+								disabled={readOnly || !collapseState.hasExpandable}
+							>
+								<ChevronsDownUp size={15} strokeWidth={1.9} />
+								全部折叠
+							</button>
+							<button
+								className="btn-ghost btn-icon-text"
+								onClick={expandAll}
+								title="展开所有已折叠的分支"
+								disabled={readOnly || !collapseState.hasCollapsed}
+							>
+								<ChevronsUpDown size={15} strokeWidth={1.9} />
+								全部展开
+							</button>
+						</div>
 
 						<button
 							className="btn-ghost btn-icon-text"
