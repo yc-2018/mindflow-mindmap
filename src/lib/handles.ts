@@ -38,9 +38,13 @@ export function handlesForDirection(dir: Direction): { sourceHandle: string; tar
 /**
  * Assign each edge the handles that make the shortest, cleanest connector.
  *
- * For horizontal structures we compare node centres and flip sides when the
- * target sits behind the source (which is what used to cause the big loop).
- * For vertical structures the pair is bottom→top / top→bottom.
+ * Horizontal structures compare node centres and pick the side that faces the
+ * other node. This is done from GEOMETRY, never from a stored `side` flag: a node
+ * dragged to the other side of the root kept its old flag, so connectors left the
+ * wrong edge and looped around.
+ *
+ * Vertical structures use bottom→top / top→bottom; the fishbone enters ribs from
+ * their top/bottom edge because they hang off a horizontal spine.
  */
 export function withAdaptiveHandles(
 	nodes: MindNode[],
@@ -77,16 +81,15 @@ export function withAdaptiveHandles(
 			const childAbove = t.position.y < s.position.y;
 			sourceHandle = HANDLE.sourceRight;
 			targetHandle = childAbove ? HANDLE.targetBottom : HANDLE.targetTop;
-		} else if (sid === 'both') {
-			// side comes from the node itself; two-sided layouts mirror per child
-			const onLeft = (t.data?.side ?? 'right') === 'left';
-			sourceHandle = onLeft ? HANDLE.sourceLeft : HANDLE.sourceRight;
-			targetHandle = onLeft ? HANDLE.targetRight : HANDLE.targetLeft;
-		} else if (sid === 'left') {
-			sourceHandle = HANDLE.sourceLeft;
-			targetHandle = HANDLE.targetRight;
 		} else {
-			// right / balanced: compare centres so a dragged-behind node flips
+			/**
+			 * All horizontal structures (balanced / right / left / both) resolve the
+			 * same way: whichever side of the parent the child actually sits on.
+			 *
+			 * Using geometry instead of `data.side` fixes the two-sided layout: after
+			 * a node was dragged across the root, its stored side was stale and the
+			 * connector left from the far edge, wrapping around the node.
+			 */
 			const forward = t.position.x + NODE_W / 2 >= s.position.x + NODE_W / 2;
 			sourceHandle = forward ? HANDLE.sourceRight : HANDLE.sourceLeft;
 			targetHandle = forward ? HANDLE.targetLeft : HANDLE.targetRight;
@@ -114,11 +117,11 @@ export function handlesFor(
 	if (sid === 'down' || sid === 'up') {
 		return handlesForDirection(sid === 'down' ? 'down' : 'up');
 	}
-	if (sid === 'left') return handlesForDirection('left');
-	if (sid === 'both' || sid === 'fishbone') {
-		return handlesForDirection((t.data?.side ?? 'right') === 'left' ? 'left' : 'right');
+	if (sid === 'fishbone') {
+		return handlesForDirection('right');
 	}
 
+	// every horizontal structure: use the real relative position
 	const forward = t.position.x + NODE_W / 2 >= s.position.x + NODE_W / 2;
 	return forward
 		? { sourceHandle: HANDLE.sourceRight, targetHandle: HANDLE.targetLeft }
