@@ -1605,6 +1605,69 @@ select {
 	border-color: #0d9488 !important;
 }
 
+/* ---------- detach zone (right edge) ---------- */
+
+/*
+ * A dedicated strip on the right edge of the canvas. It appears only while a node
+ * is being dragged and is the ONLY place a drop breaks the node out of the tree,
+ * so detaching is a deliberate action instead of a side effect of empty space.
+ */
+.detach-zone {
+	position: absolute;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: 132px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	border-left: 2px dashed transparent;
+	background: transparent;
+	color: var(--text-mute);
+	font-size: 12px;
+	pointer-events: none;
+	opacity: 0;
+	transform: translateX(12px);
+	transition: opacity 0.16s ease, transform 0.16s ease, background 0.16s ease,
+		border-color 0.16s ease, color 0.16s ease;
+	z-index: 6;
+}
+.detach-zone.is-visible {
+	opacity: 0.55;
+	transform: translateX(0);
+	border-left-color: var(--line-strong);
+	background: linear-gradient(to left, rgba(148, 163, 184, 0.1), transparent);
+}
+.detach-zone.is-active {
+	opacity: 1;
+	color: #fff;
+	border-left-color: #e5484d;
+	background: linear-gradient(to left, rgba(229, 72, 77, 0.9), rgba(229, 72, 77, 0.5));
+}
+.detach-zone__icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	height: 30px;
+	border-radius: 50%;
+	border: 1.5px solid currentColor;
+}
+.detach-zone.is-active .detach-zone__icon {
+	background: rgba(255, 255, 255, 0.18);
+}
+.detach-zone__label {
+	font-weight: 500;
+	letter-spacing: 0.02em;
+	writing-mode: vertical-rl;
+	text-orientation: mixed;
+}
+.detach-zone.is-active .detach-zone__label {
+	writing-mode: horizontal-tb;
+}
+
 /* ---------- format bar ---------- */
 
 .format-bar {

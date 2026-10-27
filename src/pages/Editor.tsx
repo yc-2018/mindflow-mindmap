@@ -28,6 +28,7 @@ import {
 	Minimize2,
 	Plus,
 	Redo2,
+	Scissors,
 	Trash2,
 	Undo2,
 	X,
@@ -57,7 +58,7 @@ import {
 } from '../lib/layout';
 import { handlesFor, withAdaptiveHandles } from '../lib/handles';
 import { childCounts, visibleGraph } from '../lib/visibility';
-import { applySiblingOrder, distanceToBox, insideBox, reparentMany, resolveDropMode, shouldDetach } from '../lib/reparent';
+import { applySiblingOrder, distanceToBox, insideBox, reparentMany, resolveDropMode } from '../lib/reparent';
 import {
 	DEFAULT_STRUCTURE,
 	directionFor,
@@ -107,6 +108,10 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	const [fullscreen, setFullscreen] = useState(false);
 	const [uploadingCount, setUploadingCount] = useState(0);
 	const [dropHint, setDropHint] = useState<DropHint | null>(null);
+	/** True while the pointer sits in the right-edge detach strip. */
+	const [detachZoneActive, setDetachZoneActive] = useState(false);
+	/** True for the duration of a node drag (drives the strip's visibility). */
+	const [dragging, setDragging] = useState(false);
 	/**
 	 * Mirror of `dropHint` kept in a ref.
 	 *
@@ -115,8 +120,29 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	 * the drop fires, and reading the state variable then yields a stale value.
 	 */
 	const dropHintRef = useRef<DropHint | null>(null);
-	/** Screen->flow box of the dragged node at drag start, used by the detach test. */
-	const dragOriginBoxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+	const canvasRef = useRef<HTMLDivElement | null>(null);
+
+	/**
+	 * Width of the detach strip on the right edge of the canvas.
+	 *
+	 * Dropping here is the only way to break a node out of the tree, which makes
+	 * the action deliberate instead of an accidental side effect of dragging into
+	 * empty space.
+	 */
+	const DETACH_ZONE_W = 132;
+
+	/** Is a SCREEN point inside the right-edge detach strip? */
+	const isInDetachZone = useCallback(
+		(point: { x: number; y: number }): boolean => {
+			const canvas = canvasRef.current;
+			if (!canvas) return false;
+			const r = canvas.getBoundingClientRect();
+			const inStrip = point.x >= r.right - DETACH_ZONE_W && point.x <= r.right;
+			const inHeight = point.y >= r.top && point.y <= r.bottom;
+			return inStrip && inHeight;
+		},
+		[],
+	);
 
 	const { fitView, getViewport, screenToFlowPosition } = useReactFlow();
 	const fileRef = useRef<HTMLInputElement | null>(null);
@@ -266,11 +292,30 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 		return nds.map((n) => ({ ...n, data: { ...n.data, childCount: counts.get(n.id) ?? 0 } }));
 	}, []);
 
-	/** Re-run the chosen structure's layout over the whole tree. */
+	/**
+	 * Re-run the chosen structure's layout over the whole tree.
+	 *
+	 * `keepPinned` controls whether nodes the user dragged to a custom spot are
+	 * respected. Structural changes pass false (see `relayoutAll`).
+	 */
 	const relayout = useCallback(
-		(nds: MindNode[], eds: Edge[], sid: StructureId): MindNode[] =>
-			layoutTree(syncChildCounts(nds, eds), eds, sid),
+		(nds: MindNode[], eds: Edge[], sid: StructureId, keepPinned = true): MindNode[] =>
+			layoutTree(syncChildCounts(nds, eds), eds, sid, { keepPinned }),
 		[syncChildCounts],
+	);
+
+	/**
+	 * Full re-layout that also clears manual placements.
+	 *
+	 * Used whenever the STRUCTURE changes (add/remove node, re-parent, collapse).
+	 * Keeping stale pinned coordinates during a structural change produced a mess:
+	 * moved nodes stayed at their old spot while their new siblings were laid out
+	 * elsewhere, so the tree looked scrambled and "整理布局" could not fix it.
+	 */
+	const relayoutAll = useCallback(
+		(nds: MindNode[], eds: Edge[], sid: StructureId): MindNode[] =>
+			relayout(nds, eds, sid, false),
+		[relayout],
 	);
 
 	// ---- node / edge changes ----
@@ -318,7 +363,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 				const handles = handlesFor(nodes, conn.source!, conn.target!, structure);
 				const next = addEdge({ ...conn, ...handles, type: 'mind', id: uid('e') }, edges);
 				setEdges(next);
-				setNodes((nds) => relayout(nds, next, structure));
+				setNodes((nds) => relayoutAll(nds, next, structure));
 			});
 			markDirty();
 		},
@@ -337,6 +382,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	// ---- drag to reparent / reorder ----
 	const onNodeDragStart = useCallback(
 		(_event: MouseEvent | TouchEvent, node: MindNode) => {
+			setDragging(true);
 			dragOrigin.current = {
 				// clone so later state updates can never mutate the snapshot
 				nodes: latest.current.nodes.map((n) => ({ ...n, data: { ...n.data } })),
@@ -348,17 +394,6 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 				? selectedIds
 				: [node.id];
 
-			// remember where the node sat, so "drag out of the map" can be judged
-			// against the space it actually occupied
-			const el = document.querySelector<HTMLElement>(`.mind-node[data-node-id="${node.id}"]`);
-			if (el) {
-				const r = el.getBoundingClientRect();
-				const tl = screenToFlowPosition({ x: r.left, y: r.top });
-				const br = screenToFlowPosition({ x: r.right, y: r.bottom });
-				dragOriginBoxRef.current = { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y };
-			} else {
-				dragOriginBoxRef.current = null;
-			}
 			setDropHint(null);
 			dropHintRef.current = null;
 		},
@@ -389,16 +424,11 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			// Measure the real DOM boxes so tall nodes (images, wrapped text) are
 			// hit-tested correctly.
 			//
-			// We keep TWO lists:
-			//  - `targets` excludes every node being dragged (they follow the pointer,
-			//    so they would always win the hit-test — and with a multi-selection
-			//    that means the whole batch must be excluded)
-			//  - `allBoxes` includes them at their ORIGINAL spots, so the "did the
-			//    user drag out of the map?" test still sees the space they came from
+			// `targets` excludes every node being dragged: they follow the pointer,
+			// so they would always win the hit-test — and with a multi-selection that
+			// means the whole batch must be excluded.
 			const movingSet = new Set(dragIdsRef.current.length ? dragIdsRef.current : [dragged.id]);
 			const targets: { id: string; x: number; y: number; w: number; h: number }[] = [];
-			const allBoxes: { x: number; y: number; w: number; h: number }[] = [];
-			const originBox = dragOriginBoxRef.current;
 
 			for (const el of document.querySelectorAll<HTMLElement>('.mind-node[data-node-id]')) {
 				const id = el.dataset.nodeId;
@@ -408,13 +438,8 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 				const br = screenToFlowPosition({ x: r.right, y: r.bottom });
 				const box = { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y };
 
-				if (movingSet.has(id)) {
-					// use where it started, not where the pointer dragged it
-					if (id === dragged.id && originBox) allBoxes.push(originBox);
-					continue;
-				}
+				if (movingSet.has(id)) continue;
 				targets.push({ id, ...box });
-				allBoxes.push(box);
 			}
 
 			// nearest target within the snapping margin wins
@@ -429,11 +454,18 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 				hit = { id: b.id, mode: resolveDropMode(rel) as DropHint['mode'] };
 			}
 
-			// no snap target: only offer "detach" when the pointer has left the whole
-			// map area (including where the dragged node started)
-			const canDetach = !hit && shouldDetach(pointer, allBoxes);
-			const next: DropHint | null = hit ?? (canDetach ? { id: '', mode: 'detach' } : null);
+			/**
+			 * Detach zone: a dedicated strip pinned to the RIGHT edge of the canvas.
+			 *
+			 * Replacing the old "far from everything" rule: dropping in open space
+			 * now simply keeps the node where you put it, and the ONLY way to break a
+			 * node out of the tree is to drag it into this strip. That makes the
+			 * action explicit instead of an accident.
+			 */
+			const inDetachZone = !hit && isInDetachZone(point);
+			const next: DropHint | null = hit ?? (inDetachZone ? { id: '', mode: 'detach' } : null);
 
+			setDetachZoneActive(inDetachZone);
 			dropHintRef.current = next;
 			setDropHint(next);
 		},
@@ -448,6 +480,8 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			const hint = dropHintRef.current;
 			dropHintRef.current = null;
 			setDropHint(null);
+			setDetachZoneActive(false);
+			setDragging(false);
 
 			if (!origin || readOnly) return;
 
@@ -480,7 +514,9 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 
 			const result = reparentMany(origin.edges, movingIds, target);
 			if (!result) {
-				setNodes((nds) => relayout(nds, origin.edges, structure));
+				// the move was rejected: re-lay-out so the dragged node snaps back
+				// to a legal spot (and drop any stale manual placement).
+				setNodes((nds) => relayoutAll(nds, origin.edges, structure));
 				return;
 			}
 
@@ -489,11 +525,10 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			setEdges(nextEdges);
 			setNodes((nds) => {
 				const ordered = applySiblingOrder(nds, nextEdges);
-				// a structural move overrides any manual placement for these nodes
-				const unpinned = ordered.map((n) =>
-					movingIds.includes(n.id) ? { ...n, data: { ...n.data, pinned: false } } : n,
-				);
-				return relayout(unpinned, nextEdges, structure);
+				// A structural move invalidates EVERY manual placement: the tree is
+				// about to be re-flowed, so leaving other nodes pinned would strand
+				// them away from their new neighbours.
+				return relayoutAll(ordered, nextEdges, structure);
 			});
 			markDirty();
 
@@ -543,7 +578,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 						{ id: uid('e'), source: parent.id, target: id, type: 'mind' },
 					];
 					setEdges(nextEdges);
-					return relayout(nextNodes, nextEdges, structure);
+					return relayoutAll(nextNodes, nextEdges, structure);
 				});
 			});
 
@@ -578,11 +613,17 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 		markDirty();
 	}, [nodes, markDirty, readOnly, withHistory, syncChildCounts]);
 
+	/**
+	 * "整理布局": force a full re-arrangement.
+	 *
+	 * Uses `relayoutAll` so every manual placement is cleared — otherwise the nodes
+	 * a user had dragged around stayed put and the button appeared to do nothing.
+	 */
 	const autoLayout = useCallback(() => {
-		withHistory(() => setNodes((nds) => relayout(nds, edges, structure)));
+		withHistory(() => setNodes((nds) => relayoutAll(nds, edges, structure)));
 		markDirty();
 		requestAnimationFrame(() => fitView({ padding: 0.25, duration: 300 }));
-	}, [edges, markDirty, fitView, withHistory, structure, relayout]);
+	}, [edges, markDirty, fitView, withHistory, structure, relayoutAll]);
 
 	// ---- structure switch ----
 	const changeStructure = useCallback(
@@ -608,7 +649,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 						);
 					}
 				}
-				return layoutTree(next, edges, sid);
+				return layoutTree(next, edges, sid, { keepPinned: false });
 			});
 			markDirty();
 			requestAnimationFrame(() => fitView({ padding: 0.28, duration: 320 }));
@@ -625,12 +666,14 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 					const next = nds.map((n) =>
 						n.id === id ? { ...n, data: { ...n.data, collapsed: !n.data.collapsed } } : n,
 					);
-					return layoutTree(next, edges, structure);
+					// collapsing changes which nodes are visible, so a full re-flow is
+					// required (stale pinned spots would leave gaps or overlaps)
+					return relayoutAll(next, edges, structure);
 				});
 			});
 			markDirty();
 		},
-		[edges, markDirty, readOnly, withHistory, structure],
+		[edges, markDirty, readOnly, withHistory, structure, relayoutAll],
 	);
 
 	const collapseAll = useCallback(() => {
@@ -642,18 +685,18 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 					...n,
 					data: { ...n.data, collapsed: (counts.get(n.id) ?? 0) > 0 && n.data.tone !== 'root' },
 				}));
-				return layoutTree(next, edges, structure);
+				return relayoutAll(next, edges, structure);
 			});
 		});
 		markDirty();
 		requestAnimationFrame(() => fitView({ padding: 0.3, duration: 300 }));
-	}, [edges, markDirty, readOnly, withHistory, structure, fitView]);
+	}, [edges, markDirty, readOnly, withHistory, structure, fitView, relayoutAll]);
 
 	const expandAll = useCallback(() => {
 		if (readOnly) return;
 		withHistory(() => {
 			setNodes((nds) =>
-				layoutTree(
+				relayoutAll(
 					nds.map((n) => ({ ...n, data: { ...n.data, collapsed: false } })),
 					edges,
 					structure,
@@ -662,7 +705,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 		});
 		markDirty();
 		requestAnimationFrame(() => fitView({ padding: 0.25, duration: 300 }));
-	}, [edges, markDirty, readOnly, withHistory, structure, fitView]);
+	}, [edges, markDirty, readOnly, withHistory, structure, fitView, relayoutAll]);
 
 	useEffect(() => {
 		const onToggle = (e: Event) => {
@@ -690,7 +733,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			withHistory(() => {
 				setEdges((eds) => {
 					const next = eds.filter((edge) => edge.id !== detail.id);
-					setNodes((nds) => relayout(nds, next, latest.current.structure));
+					setNodes((nds) => relayoutAll(nds, next, latest.current.structure));
 					return next;
 				});
 			});
@@ -1169,7 +1212,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 					</div>
 				</header>
 
-				<div className="editor__canvas" style={{ background: theme.canvas }}>
+				<div className="editor__canvas" style={{ background: theme.canvas }} ref={canvasRef}>
 					<ReactFlow<MindNode, Edge>
 						nodes={view.nodes}
 						edges={view.edges}
@@ -1230,6 +1273,23 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 							</span>
 						</Panel>
 					</ReactFlow>
+
+					{/*
+					  Detach strip: a dedicated drop zone pinned to the right edge.
+					  It only becomes visible (and only accepts a drop) while a node is
+					  being dragged, so it never clutters the normal editing view.
+					*/}
+					<div
+						className={`detach-zone${dragging ? ' is-visible' : ''}${
+							detachZoneActive ? ' is-active' : ''
+						}`}
+						aria-hidden={!detachZoneActive}
+					>
+						<span className="detach-zone__icon">
+							<Scissors size={16} strokeWidth={2} />
+						</span>
+						<span className="detach-zone__label">拖到此处脱离</span>
+					</div>
 
 					{/* floating action bar when several nodes are selected */}
 					{selectedNodes.length > 1 ? (

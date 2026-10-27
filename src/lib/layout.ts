@@ -626,14 +626,21 @@ function layoutFishbone(
  *
  * `structure` defaults to the classic left-to-right mind map, so existing
  * documents render exactly as before.
+ *
+ * `options.keepPinned` (default true) preserves nodes the user dragged to a
+ * custom spot. Explicit "整理布局" / structure switches pass `false` so the layout
+ * can actually rearrange everything — otherwise a map full of accidentally
+ * pinned nodes would ignore the button entirely.
  */
 export function layoutTree(
 	nodes: MindNode[],
 	edges: Edge[],
 	structure: StructureId = DEFAULT_STRUCTURE,
+	options: { keepPinned?: boolean } = {},
 ): MindNode[] {
 	if (!nodes.length) return nodes;
 
+	const keepPinned = options.keepPinned !== false;
 	const tree = buildTree(nodes, edges);
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 	const sid = getStructure(structure);
@@ -697,11 +704,21 @@ export function layoutTree(
 		// A pinned node keeps the position the user dragged it to; the auto-layout
 		// must not pull it back. Its children are still laid out relative to the
 		// tree, which is why only the pinned node itself is exempt.
-		if (n.data?.pinned && Number.isFinite(n.position?.x) && Number.isFinite(n.position?.y)) {
+		// `keepPinned: false` (explicit layout commands) overrides this.
+		if (
+			keepPinned &&
+			n.data?.pinned &&
+			Number.isFinite(n.position?.x) &&
+			Number.isFinite(n.position?.y)
+		) {
 			return n;
 		}
 		const p = positioned.get(n.id);
-		return p ? { ...n, position: p } : n;
+		if (!p) return n;
+		// a pinned node that is being re-laid-out must lose the flag, or the next
+		// layout would skip it again
+		const data = n.data?.pinned ? { ...n.data, pinned: false } : n.data;
+		return { ...n, position: p, data };
 	});
 
 	// tone must reflect the CURRENT depth, not whatever it was when created
