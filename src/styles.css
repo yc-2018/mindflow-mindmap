@@ -981,10 +981,6 @@ select {
 	border-color: var(--node-accent, var(--brand));
 	box-shadow: 0 0 0 3px color-mix(in srgb, var(--node-accent, var(--brand)) 22%, transparent);
 }
-/* the "+" button must stay above the selection ring */
-.mind-node.is-selected .mind-node__add {
-	z-index: 6;
-}
 
 /* tones only set text weight now; colors come from the theme via CSS vars */
 .mind-node--root .mind-node__label {
@@ -1481,63 +1477,113 @@ select {
 	background: rgba(255, 255, 255, 0.16);
 }
 
+/* Connection points are never shown: connectors are made by dragging one node
+   onto another (ProcessOn style), so there is nothing to grab here. The handles
+   still exist in the DOM because React Flow needs them to route edges. */
 .mind-handle {
-	width: 7px;
-	height: 7px;
-	background: var(--surface);
-	border: 1.5px solid var(--node-border, var(--line-strong));
+	width: 1px;
+	height: 1px;
+	min-width: 0;
+	min-height: 0;
+	background: transparent;
+	border: none;
 	opacity: 0;
-	transition: opacity 0.15s ease;
-}
-/* Both handles on a side occupy the same edge, so offset them slightly:
-   the target sits a touch above centre and the source a touch below. This keeps
-   them individually hittable while looking like a single connection point. */
-.mind-handle--src-left {
-	transform: translate(0, 3px);
-}
-.mind-handle--tgt-right {
-	transform: translate(0, -3px);
-}
-.mind-node:hover .mind-handle,
-.mind-node.is-selected .mind-handle {
-	opacity: 1;
+	pointer-events: none;
 }
 
-.mind-node__add {
+/* Only control that lives on a node: collapse/expand, shown only when the node
+   actually has children. */
+.mind-node__collapse {
 	position: absolute;
-	right: -11px;
+	right: -9px;
 	top: 50%;
 	transform: translateY(-50%);
-	width: 22px;
-	height: 22px;
+	width: 17px;
+	height: 17px;
 	padding: 0;
 	box-sizing: border-box;
 	border-radius: 50%;
-	background: var(--node-bg, var(--surface));
+	background: var(--surface);
 	border: 1.5px solid var(--node-border, var(--line-strong));
-	color: var(--node-text, var(--text-dim));
+	color: var(--text-mute);
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	line-height: 1;
-	opacity: 0;
-	transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s ease,
-		border-color 0.15s ease;
+	transition: all 0.14s ease;
 	z-index: 5;
+	opacity: 0.55;
 }
-.mind-node:hover .mind-node__add,
-.mind-node.is-selected .mind-node__add {
+.mind-node:hover .mind-node__collapse {
 	opacity: 1;
-}
-.mind-node__add:hover {
 	border-color: var(--node-accent, var(--brand));
 	color: var(--node-accent, var(--brand));
-	background: var(--surface);
-	transform: translateY(-50%) scale(1.12);
 }
-/* the collapse toggle is always visible: it is a structural control, not a hint */
-.mind-node__add.is-collapse {
+.mind-node__collapse:hover {
+	background: var(--node-accent, var(--brand));
+	border-color: var(--node-accent, var(--brand));
+	color: #fff;
+	transform: translateY(-50%) scale(1.15);
+}
+.mind-node__collapse.is-collapsed {
 	opacity: 1;
+	background: var(--node-accent, var(--brand));
+	border-color: var(--node-accent, var(--brand));
+	color: #fff;
+}
+/* the collapse badge must stay above the selection ring */
+.mind-node.is-selected .mind-node__collapse {
+	z-index: 6;
+}
+
+/* ---------- drop target highlight ---------- */
+
+/* While dragging, the node under the pointer lights up so the drop intent is
+   obvious BEFORE releasing. Different colours per intent. */
+.mind-node.is-drop-child {
+	border-color: var(--brand) !important;
+	box-shadow:
+		0 0 0 3px rgba(99, 102, 241, 0.24),
+		var(--shadow-md);
+	background: color-mix(in srgb, var(--brand) 7%, var(--node-bg));
+}
+.mind-node.is-drop-sibling-before::before,
+.mind-node.is-drop-sibling-after::after {
+	content: '';
+	position: absolute;
+	left: 4px;
+	right: 4px;
+	height: 3px;
+	border-radius: 2px;
+	background: #0d9488;
+	box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.2);
+}
+.mind-node.is-drop-sibling-before::before {
+	top: -8px;
+}
+.mind-node.is-drop-sibling-after::after {
+	bottom: -8px;
+}
+.mind-node.is-drop-sibling-before,
+.mind-node.is-drop-sibling-after {
+	border-color: #0d9488 !important;
+}
+
+/* ---------- format bar ---------- */
+
+.format-bar {
+	position: fixed;
+	z-index: 400;
+	display: flex;
+	align-items: center;
+	gap: 1px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	padding: 3px;
+	box-shadow: var(--shadow-lg);
+	animation: pop 0.12s ease;
+	pointer-events: auto;
 }
 
 .mind-edge-label {

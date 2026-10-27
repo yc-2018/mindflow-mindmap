@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
 	Bold,
 	Eraser,
@@ -58,7 +59,12 @@ const BUTTONS: Btn[] = [
 ];
 
 /**
- * Floating format bar shown above a text selection inside the node editor.
+ * Floating format bar shown directly BELOW the node's text while editing.
+ *
+ * The bar is anchored to the editor box (not the selection rectangle): the
+ * selection rectangle moves with the caret and would make the bar jump around,
+ * which is exactly the "sometimes here, sometimes bottom-right" behaviour users
+ * complained about. A fixed anchor under the text keeps it predictable.
  *
  * Actions insert Markdown/HTML snippets rather than mutating DOM ranges: the node
  * label is stored as Markdown, so wrapping the selected characters is the only
@@ -66,26 +72,35 @@ const BUTTONS: Btn[] = [
  */
 export default function FormatBar({ anchor, selection, onApply }: Props) {
 	const ref = useRef<HTMLDivElement | null>(null);
-	const [pos, setPos] = useState(anchor);
+	const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
 
-	// keep the bar on screen
-	useEffect(() => {
+	/**
+	 * Position the bar directly UNDER the anchor (the node's text box), centred.
+	 *
+	 * The bar is rendered through a portal into <body> on purpose: inside React
+	 * Flow's transformed viewport a `position: fixed` element resolves against the
+	 * transformed ancestor instead of the window, which made the bar appear in the
+	 * wrong place (sometimes bottom-right, sometimes off screen).
+	 */
+	useLayoutEffect(() => {
 		const el = ref.current;
 		if (!el) return;
 		const w = el.offsetWidth;
 		const h = el.offsetHeight;
 		const left = Math.min(Math.max(8, anchor.x - w / 2), window.innerWidth - w - 8);
-		const top = Math.max(8, anchor.y - h - 10);
+		let top = anchor.y + 6;
+		// only flip above when there is genuinely no room below
+		if (top + h > window.innerHeight - 8) top = Math.max(8, anchor.y - h - 40);
 		setPos({ x: left, y: top });
 	}, [anchor]);
 
 	const hasSelection = selection.end > selection.start;
 
-	return (
+	const node = (
 		<div
 			ref={ref}
 			className="format-bar"
-			style={{ left: pos.x, top: pos.y }}
+			style={pos ? { left: pos.x, top: pos.y } : { left: -9999, top: -9999 }}
 			// never steal focus from the textarea
 			onMouseDown={(e) => e.preventDefault()}
 		>
@@ -103,6 +118,8 @@ export default function FormatBar({ anchor, selection, onApply }: Props) {
 			))}
 		</div>
 	);
+
+	return createPortal(node, document.body);
 }
 
 /** Wrap (or unwrap) the selected text with the marker pair for `kind`. */

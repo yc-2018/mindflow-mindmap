@@ -35,6 +35,73 @@ export function resolveDropMode(rel: number): DropMode {
 }
 
 /**
+ * Extra distance (in flow units) around a node that still counts as "aiming at
+ * it". Makes the drop target forgiving without letting a stray drag detach.
+ */
+export const DROP_MARGIN = 28;
+
+/**
+ * How far outside the map's overall bounding box the pointer must be before a
+ * drop means "detach".
+ *
+ * Detaching must be deliberate. Mind maps have large gaps between nodes, so a
+ * "distance to the nearest node" rule fires far too easily — that is exactly why
+ * a small nudge used to break the tree. Instead we require the pointer to leave
+ * the whole map area (plus this margin), which reads as "drag to the edge".
+ */
+export const DETACH_EDGE_MARGIN = 90;
+
+/** Does the pointer sit inside the node's box, padded by `margin`? */
+export function insideBox(
+	pointer: { x: number; y: number },
+	box: { x: number; y: number; w: number; h: number },
+	margin = DROP_MARGIN,
+): boolean {
+	return (
+		pointer.x >= box.x - margin &&
+		pointer.x <= box.x + box.w + margin &&
+		pointer.y >= box.y - margin &&
+		pointer.y <= box.y + box.h + margin
+	);
+}
+
+/** Squared distance from the pointer to the nearest point of a box. */
+export function distanceToBox(
+	pointer: { x: number; y: number },
+	box: { x: number; y: number; w: number; h: number },
+): number {
+	const dx = Math.max(box.x - pointer.x, 0, pointer.x - (box.x + box.w));
+	const dy = Math.max(box.y - pointer.y, 0, pointer.y - (box.y + box.h));
+	return Math.hypot(dx, dy);
+}
+
+/**
+ * Decide whether a drop at `pointer` should detach the dragged node.
+ *
+ * Only true when the pointer has left the map's overall bounding box by at least
+ * DETACH_EDGE_MARGIN — i.e. the user deliberately dragged out to the edge.
+ * A casual nudge inside the map never detaches.
+ */
+export function shouldDetach(
+	pointer: { x: number; y: number },
+	boxes: { x: number; y: number; w: number; h: number }[],
+): boolean {
+	if (!boxes.length) return false;
+	const minX = Math.min(...boxes.map((b) => b.x));
+	const minY = Math.min(...boxes.map((b) => b.y));
+	const maxX = Math.max(...boxes.map((b) => b.x + b.w));
+	const maxY = Math.max(...boxes.map((b) => b.y + b.h));
+
+	const m = DETACH_EDGE_MARGIN;
+	return (
+		pointer.x < minX - m ||
+		pointer.x > maxX + m ||
+		pointer.y < minY - m ||
+		pointer.y > maxY + m
+	);
+}
+
+/**
  * Re-parent / re-order a node inside the tree.
  *
  * Returns the new edge list, or `null` when the move is not allowed (dropping a

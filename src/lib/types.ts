@@ -37,6 +37,8 @@ export interface MindNodeData extends Record<string, unknown> {
 	side?: 'left' | 'right';
 	/** Manual sibling order within the parent (lower = earlier). */
 	order?: number;
+	/** Set while a drag hovers this node, so it can render a drop highlight. */
+	dropTarget?: 'child' | 'sibling-before' | 'sibling-after' | null;
 }
 
 export type MindNode = Node<MindNodeData, 'mind'>;

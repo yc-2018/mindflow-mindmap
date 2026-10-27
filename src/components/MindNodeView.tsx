@@ -21,17 +21,15 @@ export const TOGGLE_COLLAPSE_EVENT = 'mindflow:toggle-collapse';
 export const LABEL_COMMIT_EVENT = 'mindflow:label-commit';
 
 /**
- * Mind-map node: label on its own row at the top, then a row of small image
- * thumbnails underneath.
+ * Mind-map node, modelled on ProcessOn's interaction:
  *
- * Editing happens IN PLACE: double-click swaps the label for a textarea of the
- * same size, no floating dialog. Selecting text inside the editor pops a format
- * bar that writes Markdown/HTML into the stored label.
- *
- * The trailing button is context aware:
- *  - a node with children shows "−" to collapse, "＋" when collapsed
- *  - a leaf shows "＋" to add its first child
- * Holding Shift on a collapsed node still adds a child instead of expanding.
+ *  - NO always-on "+" button. New nodes come from the keyboard (Tab / Enter) or
+ *    the toolbar. The only button is the collapse toggle, shown solely when the
+ *    node actually has children.
+ *  - NO visible connection points. Connectors are created by dragging a node onto
+ *    another one; the editor highlights the drop target instead.
+ *  - Text is edited in place (double-click). Selecting text shows a format bar
+ *    pinned directly UNDER the text, always in the same place.
  */
 function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 	const tone = data.tone ?? 'leaf';
@@ -43,6 +41,7 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 	const hasChildren = childCount > 0;
 
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
+	const labelRef = useRef<HTMLDivElement | null>(null);
 	const [draft, setDraft] = useState(data.label);
 	const [format, setFormat] = useState<{ x: number; y: number; start: number; end: number } | null>(null);
 	const { updateNodeData } = useReactFlow();
@@ -65,12 +64,17 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 	}, [editing, data.label]);
 
 	/**
-	 * Show the format bar whenever there is a non-empty selection.
-	 *
-	 * `onSelect` does not fire for programmatic selection changes (and some
-	 * browsers skip it for keyboard selection), so we also poll while the node is
-	 * in edit mode. The poll is cheap and stops as soon as editing ends.
+	 * Anchor for the format bar: the BOTTOM of the label box, horizontally
+	 * centred. Using the label box (not the selection rect) is what makes the bar
+	 * appear in the same place every time.
 	 */
+	const anchorFromLabel = () => {
+		const el = labelRef.current ?? inputRef.current;
+		if (!el) return null;
+		const r = el.getBoundingClientRect();
+		return { x: r.x + r.width / 2, y: r.bottom };
+	};
+
 	const updateFormatBar = () => {
 		const el = inputRef.current;
 		if (!el) return;
@@ -79,19 +83,15 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 			setFormat(null);
 			return;
 		}
-		const rect = el.getBoundingClientRect();
-		setFormat({
-			x: rect.x + rect.width / 2,
-			y: rect.y + 4,
-			start,
-			end,
-		});
+		const anchor = anchorFromLabel();
+		if (!anchor) return;
+		setFormat({ ...anchor, start, end });
 	};
 
 	// poll the textarea selection while editing so the bar tracks it reliably
 	useEffect(() => {
 		if (!editing) return;
-		const id = window.setInterval(() => {
+		const timer = window.setInterval(() => {
 			const el = inputRef.current;
 			if (!el) return;
 			if (document.activeElement !== el) return;
@@ -99,11 +99,12 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 			setFormat((prev) => {
 				if (start === end) return prev === null ? prev : null;
 				if (prev && prev.start === start && prev.end === end) return prev;
-				const rect = el.getBoundingClientRect();
-				return { x: rect.x + rect.width / 2, y: rect.y + 4, start, end };
+				const anchor = anchorFromLabel();
+				if (!anchor) return prev;
+				return { ...anchor, start, end };
 			});
-		}, 220);
-		return () => window.clearInterval(id);
+		}, 180);
+		return () => window.clearInterval(timer);
 	}, [editing]);
 
 	const applyFormat = (kind: FormatKind) => {
@@ -111,7 +112,6 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 		if (!el || !format) return;
 		const result = wrapSelection(draft, format.start, format.end, kind);
 		setDraft(result.text);
-		// restore the selection after React re-renders the value
 		requestAnimationFrame(() => {
 			const node = inputRef.current;
 			if (!node) return;
@@ -133,11 +133,15 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 
 	const canAddMore = images.length + pending < MAX_IMAGES;
 	const palette = theme[tone];
+	const dropTarget = data.dropTarget ?? null;
 
 	return (
 		<div
-			className={`mind-node mind-node--${tone}${selected ? ' is-selected' : ''}${collapsed ? ' is-collapsed' : ''}`}
+			className={`mind-node mind-node--${tone}${selected ? ' is-selected' : ''}${
+				collapsed ? ' is-collapsed' : ''
+			}${dropTarget ? ` is-drop-${dropTarget}` : ''}`}
 			data-node-id={id}
+			data-drop={dropTarget ?? undefined}
 			style={
 				{
 					'--node-bg': palette.bg,
@@ -147,52 +151,23 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 				} as React.CSSProperties
 			}
 		>
-			{/* Four handles: a source and a target on each side, so a connector can
-			    always leave and enter on whichever side faces the other node.
-			    Using explicit ids lets lib/handles.ts pick the shortest route. */}
-			<Handle
-				type="target"
-				position={Position.Left}
-				id={HANDLE.targetLeft}
-				className="mind-handle"
-			/>
-			<Handle
-				type="source"
-				position={Position.Left}
-				id={HANDLE.sourceLeft}
-				className="mind-handle mind-handle--src-left"
-			/>
-			<Handle
-				type="source"
-				position={Position.Right}
-				id={HANDLE.sourceRight}
-				className="mind-handle"
-			/>
-			<Handle
-				type="target"
-				position={Position.Right}
-				id={HANDLE.targetRight}
-				className="mind-handle mind-handle--tgt-right"
-			/>
-			{/* vertical pair, used by the top-down / bottom-up structures */}
-			<Handle
-				type="source"
-				position={Position.Bottom}
-				id={HANDLE.sourceBottom}
-				className="mind-handle mind-handle--vertical"
-			/>
-			<Handle
-				type="target"
-				position={Position.Top}
-				id={HANDLE.targetTop}
-				className="mind-handle mind-handle--vertical"
-			/>
+			{/* Connection points stay invisible: connectors are made by dragging a
+			    node onto another, so there is nothing to click here. Keeping the
+			    handles present is still required for React Flow to route edges. */}
+			<Handle type="target" position={Position.Left} id={HANDLE.targetLeft} className="mind-handle" />
+			<Handle type="source" position={Position.Left} id={HANDLE.sourceLeft} className="mind-handle" />
+			<Handle type="source" position={Position.Right} id={HANDLE.sourceRight} className="mind-handle" />
+			<Handle type="target" position={Position.Right} id={HANDLE.targetRight} className="mind-handle" />
+			<Handle type="source" position={Position.Bottom} id={HANDLE.sourceBottom} className="mind-handle" />
+			<Handle type="target" position={Position.Top} id={HANDLE.targetTop} className="mind-handle" />
+			<Handle type="source" position={Position.Top} id={HANDLE.sourceTop} className="mind-handle" />
+			<Handle type="target" position={Position.Bottom} id={HANDLE.targetBottom} className="mind-handle" />
 
-			{editing ? (
-				<div className="mind-node__label nodrag nopan">
+			<div className="mind-node__label" ref={labelRef}>
+				{editing ? (
 					<textarea
 						ref={inputRef}
-						className="mind-node__input"
+						className="mind-node__input nodrag nopan"
 						value={draft}
 						rows={1}
 						onChange={(e) => {
@@ -216,7 +191,6 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 								updateNodeData(id, { editing: false });
 								return;
 							}
-							// formatting shortcuts
 							if (e.ctrlKey || e.metaKey) {
 								const k = e.key.toLowerCase();
 								if (k === 'b' || k === 'i' || k === 'u') {
@@ -227,24 +201,25 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 							}
 						}}
 					/>
-					{format ? (
-						<FormatBar
-							anchor={{ x: format.x, y: format.y }}
-							selection={{ start: format.start, end: format.end }}
-							onApply={(kind) => applyFormat(kind)}
-						/>
-					) : null}
-				</div>
-			) : (
-				<div className="mind-node__label">
-					<MarkdownLabel source={data.label || '未命名主题'} />
-					{hasChildren && collapsed ? (
-						<span className="mind-node__count" title={`${childCount} 个隐藏的子主题`}>
-							{childCount}
-						</span>
-					) : null}
-				</div>
-			)}
+				) : (
+					<>
+						<MarkdownLabel source={data.label || '未命名主题'} />
+						{hasChildren && collapsed ? (
+							<span className="mind-node__count" title={`${childCount} 个隐藏的子主题`}>
+								{childCount}
+							</span>
+						) : null}
+					</>
+				)}
+			</div>
+
+			{format ? (
+				<FormatBar
+					anchor={{ x: format.x, y: format.y }}
+					selection={{ start: format.start, end: format.end }}
+					onApply={(kind) => applyFormat(kind)}
+				/>
+			) : null}
 
 			{images.length || pending ? (
 				<div className="mind-node__images nodrag nopan">
@@ -305,31 +280,19 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 				</div>
 			) : null}
 
-			{!editing ? (
+			{/* Only the collapse toggle exists, and only when there is something to
+			    collapse. Adding children is keyboard-driven, like ProcessOn. */}
+			{hasChildren && !editing ? (
 				<button
 					type="button"
-					className={`mind-node__add nodrag nopan${hasChildren && !collapsed ? ' is-collapse' : ''}`}
-					title={
-						hasChildren
-							? collapsed
-								? `展开 ${childCount} 个子主题（Shift+点击 直接加子主题）`
-								: `折叠 ${childCount} 个子主题`
-							: '添加子主题'
-					}
+					className={`mind-node__collapse nodrag nopan${collapsed ? ' is-collapsed' : ''}`}
+					title={collapsed ? `展开 ${childCount} 个子主题` : `折叠 ${childCount} 个子主题`}
 					onClick={(e) => {
 						e.stopPropagation();
-						if (hasChildren && !e.shiftKey) {
-							window.dispatchEvent(new CustomEvent(TOGGLE_COLLAPSE_EVENT, { detail: { id } }));
-							return;
-						}
-						window.dispatchEvent(new CustomEvent(ADD_CHILD_EVENT, { detail: { id } }));
+						window.dispatchEvent(new CustomEvent(TOGGLE_COLLAPSE_EVENT, { detail: { id } }));
 					}}
 				>
-					{hasChildren && !collapsed ? (
-						<Minus size={13} strokeWidth={2.8} />
-					) : (
-						<Plus size={13} strokeWidth={2.4} />
-					)}
+					{collapsed ? <Plus size={11} strokeWidth={2.8} /> : <Minus size={11} strokeWidth={2.8} />}
 				</button>
 			) : null}
 		</div>

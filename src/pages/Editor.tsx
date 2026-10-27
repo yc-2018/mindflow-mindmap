@@ -7,6 +7,7 @@ import {
 	Panel,
 	ReactFlow,
 	ReactFlowProvider,
+	SelectionMode,
 	addEdge,
 	applyEdgeChanges,
 	applyNodeChanges,
@@ -24,7 +25,6 @@ import {
 	LayoutGrid,
 	Maximize2,
 	Minimize2,
-	MousePointerSquareDashed,
 	Plus,
 	Redo2,
 	Trash2,
@@ -55,7 +55,7 @@ import {
 } from '../lib/layout';
 import { handlesFor, withAdaptiveHandles } from '../lib/handles';
 import { childCounts, visibleGraph } from '../lib/visibility';
-import { applySiblingOrder, reparentEdges, resolveDropMode, sameTopology } from '../lib/reparent';
+import { applySiblingOrder, distanceToBox, insideBox, reparentEdges, resolveDropMode, shouldDetach } from '../lib/reparent';
 import {
 	DEFAULT_STRUCTURE,
 	directionFor,
@@ -88,7 +88,7 @@ interface LightboxState {
 /** Which node the pointer is over during a drag, plus where inside it. */
 interface DropHint {
 	id: string;
-	mode: 'child' | 'sibling-before' | 'sibling-after';
+	mode: 'child' | 'sibling-before' | 'sibling-after' | 'detach';
 }
 
 function EditorInner({ mapId, readOnly = false }: EditorProps) {
@@ -113,7 +113,8 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	 * the drop fires, and reading the state variable then yields a stale value.
 	 */
 	const dropHintRef = useRef<DropHint | null>(null);
-	const [selectionMode, setSelectionMode] = useState(false);
+	/** Screen->flow box of the dragged node at drag start, used by the detach test. */
+	const dragOriginBoxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
 	const { fitView, getViewport, setViewport, screenToFlowPosition } = useReactFlow();
 	const fileRef = useRef<HTMLInputElement | null>(null);
@@ -304,19 +305,40 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	);
 
 	// ---- drag to reparent / reorder ----
-	const onNodeDragStart = useCallback(() => {
-		dragOrigin.current = {
-			// clone so later state updates can never mutate the snapshot
-			nodes: latest.current.nodes.map((n) => ({ ...n, data: { ...n.data } })),
-			edges: latest.current.edges.map((e) => ({ ...e })),
-		};
-		setDropHint(null);
-		dropHintRef.current = null;
-	}, []);
+	const onNodeDragStart = useCallback(
+		(_event: MouseEvent | TouchEvent, node: MindNode) => {
+			dragOrigin.current = {
+				// clone so later state updates can never mutate the snapshot
+				nodes: latest.current.nodes.map((n) => ({ ...n, data: { ...n.data } })),
+				edges: latest.current.edges.map((e) => ({ ...e })),
+			};
+			// remember where the node sat, so "drag out of the map" can be judged
+			// against the space it actually occupied
+			const el = document.querySelector<HTMLElement>(`.mind-node[data-node-id="${node.id}"]`);
+			if (el) {
+				const r = el.getBoundingClientRect();
+				const tl = screenToFlowPosition({ x: r.left, y: r.top });
+				const br = screenToFlowPosition({ x: r.right, y: r.bottom });
+				dragOriginBoxRef.current = { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y };
+			} else {
+				dragOriginBoxRef.current = null;
+			}
+			setDropHint(null);
+			dropHintRef.current = null;
+		},
+		[screenToFlowPosition],
+	);
 
 	/**
 	 * While dragging, work out what dropping here would mean and highlight it.
-	 * Vertical structures read the pointer's x band instead of y.
+	 *
+	 * ProcessOn-style behaviour:
+	 *  - near a node -> snap to it (child / before / after), with a visual hint
+	 *  - far from every node -> nothing happens (the node just goes back)
+	 *  - clearly in empty space (beyond DETACH_MARGIN) -> detach
+	 *
+	 * The old code detached on *any* drop that missed a node, which is why a
+	 * casual nudge broke the tree.
 	 */
 	const onNodeDrag = useCallback(
 		(event: MouseEvent | TouchEvent, dragged: MindNode) => {
@@ -328,39 +350,54 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 					: { x: (event as MouseEvent).clientX, y: (event as MouseEvent).clientY };
 			const pointer = screenToFlowPosition(point);
 
-			// Hit-test against the nodes' LAYOUT boxes.
+			// Measure the real DOM boxes so tall nodes (images, wrapped text) are
+			// hit-tested correctly.
 			//
-			// Two subtleties:
-			//  1. The dragged node moves with the pointer, so its live position
-			//     would always "win" the hit-test — skip it explicitly.
-			//  2. Node heights vary (images, wrapped text), so measure the real DOM
-			//     box instead of guessing a constant.
-			const boxes = new Map<string, { x: number; y: number; w: number; h: number }>();
+			// We keep TWO lists:
+			//  - `targets` excludes the dragged node (it follows the pointer, so it
+			//    would always win the hit-test)
+			//  - `allBoxes` includes it at its ORIGINAL spot, so the "did the user
+			//    drag out of the map?" test still sees the space the node came from
+			const targets: { id: string; x: number; y: number; w: number; h: number }[] = [];
+			const allBoxes: { x: number; y: number; w: number; h: number }[] = [];
+			const originBox = dragOriginBoxRef.current;
+
 			for (const el of document.querySelectorAll<HTMLElement>('.mind-node[data-node-id]')) {
 				const id = el.dataset.nodeId;
-				if (!id || id === dragged.id) continue;
+				if (!id) continue;
 				const r = el.getBoundingClientRect();
-				// convert the screen box back into flow coordinates
 				const tl = screenToFlowPosition({ x: r.left, y: r.top });
 				const br = screenToFlowPosition({ x: r.right, y: r.bottom });
-				boxes.set(id, { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y });
+				const box = { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y };
+
+				if (id === dragged.id) {
+					// use where it started, not where the pointer dragged it
+					if (originBox) allBoxes.push(originBox);
+					continue;
+				}
+				targets.push({ id, ...box });
+				allBoxes.push(box);
 			}
 
+			// nearest target within the snapping margin wins
 			let hit: DropHint | null = null;
-			for (const [id, b] of boxes) {
-				const inside =
-					pointer.x >= b.x &&
-					pointer.x <= b.x + b.w &&
-					pointer.y >= b.y &&
-					pointer.y <= b.y + b.h;
-				if (!inside) continue;
-
+			let nearest = Infinity;
+			for (const b of targets) {
+				if (!insideBox(pointer, b)) continue;
+				const d = distanceToBox(pointer, b);
+				if (d >= nearest) continue;
+				nearest = d;
 				const rel = vertical ? (pointer.x - b.x) / b.w : (pointer.y - b.y) / b.h;
-				hit = { id, mode: resolveDropMode(rel) as DropHint['mode'] };
-				break;
+				hit = { id: b.id, mode: resolveDropMode(rel) as DropHint['mode'] };
 			}
-			dropHintRef.current = hit;
-			setDropHint(hit);
+
+			// no snap target: only offer "detach" when the pointer has left the whole
+			// map area (including where the dragged node started)
+			const canDetach = !hit && shouldDetach(pointer, allBoxes);
+			const next: DropHint | null = hit ?? (canDetach ? { id: '', mode: 'detach' } : null);
+
+			dropHintRef.current = next;
+			setDropHint(next);
 		},
 		[screenToFlowPosition],
 	);
@@ -376,16 +413,21 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 
 			if (!origin || readOnly) return;
 
-			// dropped on empty canvas -> detach into its own tree
+			// A drop with no snap target and no detach intent is a no-op: the node
+			// returns to its laid-out position. This is the "随便动一下不脱落" rule.
+			if (!hint) {
+				setNodes((nds) => relayout(nds, origin.edges, structure));
+				return;
+			}
+
 			// NOTE: DropHint uses `id`; reparentEdges expects `hoveredId` — map it.
-			const target = hint
-				? { mode: hint.mode, hoveredId: hint.id }
-				: { mode: 'detach' as const, hoveredId: undefined };
+			const target =
+				hint.mode === 'detach'
+					? { mode: 'detach' as const, hoveredId: undefined }
+					: { mode: hint.mode, hoveredId: hint.id };
 
 			const result = reparentEdges(origin.edges, dragged.id, target);
 			if (!result) {
-				// nothing structural changed: put the node back where the layout says
-				// it belongs, so the map never drifts out of shape
 				setNodes((nds) => relayout(nds, origin.edges, structure));
 				return;
 			}
@@ -894,8 +936,23 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	// paint is already routed correctly (before the sync effect runs)
 	const view = useMemo(() => {
 		const visible = visibleGraph(nodes, edges);
-		return { ...visible, edges: withAdaptiveHandles(visible.nodes, visible.edges, structure) };
-	}, [nodes, edges, structure]);
+		const routed = withAdaptiveHandles(visible.nodes, visible.edges, structure);
+		// mark the node the pointer is hovering so it can show a drop highlight
+		const hoveredId = dropHint && dropHint.mode !== 'detach' ? dropHint.id : null;
+		// 'detach' has no target node, so the highlight type excludes it
+		const dropMode: 'child' | 'sibling-before' | 'sibling-after' | null =
+			dropHint && dropHint.mode !== 'detach' ? dropHint.mode : null;
+		const marked = hoveredId
+			? visible.nodes.map((n) =>
+					n.id === hoveredId
+						? { ...n, data: { ...n.data, dropTarget: dropMode } }
+						: { ...n, data: { ...n.data, dropTarget: null } },
+				)
+			: visible.nodes.some((n) => n.data.dropTarget)
+				? visible.nodes.map((n) => ({ ...n, data: { ...n.data, dropTarget: null } }))
+				: visible.nodes;
+		return { ...visible, nodes: marked, edges: routed };
+	}, [nodes, edges, structure, dropHint]);
 
 	const stats = useMemo(() => ({ nodes: nodes.length, edges: edges.length }), [nodes, edges]);
 	const selectedNodes = nodes.filter((n) => n.selected);
@@ -913,8 +970,8 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	return (
 		<ThemeProvider value={theme}>
 			<div
-				className={`editor${fullscreen ? ' is-fullscreen' : ''}${theme.id === 'dark' ? ' is-dark' : ''}${
-					selectionMode ? ' is-selecting' : ''
+				className={`editor is-selecting${fullscreen ? ' is-fullscreen' : ''}${
+					theme.id === 'dark' ? ' is-dark' : ''
 				}`}
 				ref={shellRef}
 				style={{ background: theme.canvas }}
@@ -987,15 +1044,6 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 						</button>
 
 						<button
-							className={`btn-ghost btn-icon-text${selectionMode ? ' is-active' : ''}`}
-							onClick={() => setSelectionMode((v) => !v)}
-							title="框选模式：在空白处拖拽框选多个节点"
-						>
-							<MousePointerSquareDashed size={15} strokeWidth={1.9} />
-							框选
-						</button>
-
-						<button
 							className="btn-ghost btn-icon-text"
 							onClick={onPickImage}
 							disabled={readOnly}
@@ -1043,10 +1091,15 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 						maxZoom={2.5}
 						proOptions={{ hideAttribution: true }}
 						nodesDraggable={!readOnly}
-						nodesConnectable={!readOnly}
+						nodesConnectable={false}
 						elementsSelectable
-						selectionOnDrag={selectionMode}
-						panOnDrag={!selectionMode}
+						/* Box-select is always on, like ProcessOn: dragging on empty
+						   canvas draws a selection rectangle. Pan with the middle/right
+						   button or Space+drag. */
+						selectionOnDrag
+						panOnDrag={[1, 2]}
+						panOnScroll={false}
+						selectionMode={SelectionMode.Partial}
 						multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
 						selectionKeyCode={null}
 						deleteKeyCode={null}
@@ -1102,14 +1155,16 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 						</div>
 					) : null}
 
-					{/* drop indicator while dragging a node over another */}
+					{/* drop indicator while dragging a node near another */}
 					{dropHint ? (
 						<div className={`drop-hint drop-hint--${dropHint.mode}`}>
 							{dropHint.mode === 'child'
-								? '放入成为子主题'
+								? '松手成为子主题'
 								: dropHint.mode === 'sibling-before'
-									? '插入到此主题之前'
-									: '插入到此主题之后'}
+									? '松手插入到此主题之前'
+									: dropHint.mode === 'sibling-after'
+										? '松手插入到此主题之后'
+										: '松手脱离为独立分支'}
 						</div>
 					) : null}
 				</div>
