@@ -45,6 +45,19 @@ function pickPath(args: {
 	const dx = Math.abs(targetX - sourceX);
 	const dy = Math.abs(targetY - sourceY);
 
+	// Fishbone ribs: the connector leaves the spine horizontally but enters the
+	// rib's top/bottom edge, so a smooth step reads better than a bezier loop.
+	const entersVertically =
+		sourceHandleId === HANDLE.sourceRight && Math.abs(targetY - sourceY) > Math.abs(targetX - sourceX) * 0.6;
+
+	if (entersVertically) {
+		const [path, labelX, labelY] = getSmoothStepPath({
+			...args,
+			borderRadius: 12,
+		});
+		return { path, labelX, labelY };
+	}
+
 	// vertical connectors (top-down / bottom-up structures)
 	const vertical =
 		sourceHandleId === HANDLE.sourceBottom ||

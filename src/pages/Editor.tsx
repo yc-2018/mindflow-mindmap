@@ -51,11 +51,12 @@ import {
 	NODE_WIDTH,
 	parentOf,
 	pruneEdges,
+	syncTones,
 	wouldCreateCycle,
 } from '../lib/layout';
 import { handlesFor, withAdaptiveHandles } from '../lib/handles';
 import { childCounts, visibleGraph } from '../lib/visibility';
-import { applySiblingOrder, distanceToBox, insideBox, reparentEdges, resolveDropMode, shouldDetach } from '../lib/reparent';
+import { applySiblingOrder, distanceToBox, insideBox, reparentMany, resolveDropMode, shouldDetach } from '../lib/reparent';
 import {
 	DEFAULT_STRUCTURE,
 	directionFor,
@@ -154,13 +155,18 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 				if (!alive) return;
 				setTitle(map.title);
 				const doc = parseDoc(map.data);
-				const counts = childCounts(doc.nodes, doc.edges);
-				const withCounts = doc.nodes.map((n) => ({
+				const pruned = pruneEdges(doc.nodes, doc.edges);
+				// tone must reflect the real depth: older documents (or nodes whose
+				// position changed) can carry stale tones, which is what made some
+				// nodes accent-coloured and others white.
+				const toned = syncTones(doc.nodes, pruned);
+				const counts = childCounts(toned, pruned);
+				const withCounts = toned.map((n) => ({
 					...n,
 					data: { ...n.data, childCount: counts.get(n.id) ?? 0 },
 				}));
 				setNodes(withCounts);
-				setEdges(pruneEdges(withCounts, doc.edges));
+				setEdges(pruned);
 				setThemeId(doc.theme || 'classic');
 				setStructure(getStructure(doc.structure));
 				history.reset();
@@ -304,6 +310,15 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 		[nodes, edges, markDirty, withHistory, structure, relayout],
 	);
 
+	/**
+	 * Nodes that travel together on this drag.
+	 *
+	 * When several nodes are selected, dragging any of them moves the WHOLE
+	 * selection (that is what a multi-select drag means). The selection is captured
+	 * at drag start so later `setDropHint` re-renders cannot change it mid-gesture.
+	 */
+	const dragIdsRef = useRef<string[]>([]);
+
 	// ---- drag to reparent / reorder ----
 	const onNodeDragStart = useCallback(
 		(_event: MouseEvent | TouchEvent, node: MindNode) => {
@@ -312,6 +327,12 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 				nodes: latest.current.nodes.map((n) => ({ ...n, data: { ...n.data } })),
 				edges: latest.current.edges.map((e) => ({ ...e })),
 			};
+			// capture the full selection (or just this node when it is not selected)
+			const selectedIds = latest.current.nodes.filter((n) => n.selected).map((n) => n.id);
+			dragIdsRef.current = selectedIds.includes(node.id) && selectedIds.length > 1
+				? selectedIds
+				: [node.id];
+
 			// remember where the node sat, so "drag out of the map" can be judged
 			// against the space it actually occupied
 			const el = document.querySelector<HTMLElement>(`.mind-node[data-node-id="${node.id}"]`);
@@ -354,10 +375,12 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			// hit-tested correctly.
 			//
 			// We keep TWO lists:
-			//  - `targets` excludes the dragged node (it follows the pointer, so it
-			//    would always win the hit-test)
-			//  - `allBoxes` includes it at its ORIGINAL spot, so the "did the user
-			//    drag out of the map?" test still sees the space the node came from
+			//  - `targets` excludes every node being dragged (they follow the pointer,
+			//    so they would always win the hit-test — and with a multi-selection
+			//    that means the whole batch must be excluded)
+			//  - `allBoxes` includes them at their ORIGINAL spots, so the "did the
+			//    user drag out of the map?" test still sees the space they came from
+			const movingSet = new Set(dragIdsRef.current.length ? dragIdsRef.current : [dragged.id]);
 			const targets: { id: string; x: number; y: number; w: number; h: number }[] = [];
 			const allBoxes: { x: number; y: number; w: number; h: number }[] = [];
 			const originBox = dragOriginBoxRef.current;
@@ -370,9 +393,9 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 				const br = screenToFlowPosition({ x: r.right, y: r.bottom });
 				const box = { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y };
 
-				if (id === dragged.id) {
+				if (movingSet.has(id)) {
 					// use where it started, not where the pointer dragged it
-					if (originBox) allBoxes.push(originBox);
+					if (id === dragged.id && originBox) allBoxes.push(originBox);
 					continue;
 				}
 				targets.push({ id, ...box });
@@ -413,20 +436,23 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 
 			if (!origin || readOnly) return;
 
-			// A drop with no snap target and no detach intent is a no-op: the node
-			// returns to its laid-out position. This is the "随便动一下不脱落" rule.
+			// A drop with no snap target and no detach intent is a no-op: the nodes
+			// return to their laid-out positions. This is the "随便动一下不脱落" rule.
 			if (!hint) {
 				setNodes((nds) => relayout(nds, origin.edges, structure));
 				return;
 			}
 
-			// NOTE: DropHint uses `id`; reparentEdges expects `hoveredId` — map it.
+			const movingIds = dragIdsRef.current.length ? dragIdsRef.current : [dragged.id];
+			dragIdsRef.current = [];
+
+			// NOTE: DropHint uses `id`; reparentMany expects `hoveredId` — map it.
 			const target =
 				hint.mode === 'detach'
 					? { mode: 'detach' as const, hoveredId: undefined }
 					: { mode: hint.mode, hoveredId: hint.id };
 
-			const result = reparentEdges(origin.edges, dragged.id, target);
+			const result = reparentMany(origin.edges, movingIds, target);
 			if (!result) {
 				setNodes((nds) => relayout(nds, origin.edges, structure));
 				return;
@@ -441,9 +467,11 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			});
 			markDirty();
 
-			if (target.mode === 'detach') toast('已脱离为独立分支', 'success');
-			else if (target.mode === 'child') toast('已改为子主题', 'success');
-			else toast('已调整同级顺序', 'success');
+			const count = movingIds.length;
+			const suffix = count > 1 ? `（${count} 个主题）` : '';
+			if (target.mode === 'detach') toast(`已脱离为独立分支${suffix}`, 'success');
+			else if (target.mode === 'child') toast(`已改为子主题${suffix}`, 'success');
+			else toast(`已调整同级顺序${suffix}`, 'success');
 		},
 		[readOnly, structure, relayout, markDirty, history],
 	);

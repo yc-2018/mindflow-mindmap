@@ -71,7 +71,13 @@ export function withAdaptiveHandles(
 				sourceHandle = HANDLE.sourceTop;
 				targetHandle = childBelow ? HANDLE.targetBottom : HANDLE.targetTop;
 			}
-		} else if (sid === 'both' || sid === 'fishbone') {
+		} else if (sid === 'fishbone') {
+			// The spine runs horizontally, so bones leave/enter horizontally too.
+			// A rib above the spine enters on its bottom edge, below on its top edge.
+			const childAbove = t.position.y < s.position.y;
+			sourceHandle = HANDLE.sourceRight;
+			targetHandle = childAbove ? HANDLE.targetBottom : HANDLE.targetTop;
+		} else if (sid === 'both') {
 			// side comes from the node itself; two-sided layouts mirror per child
 			const onLeft = (t.data?.side ?? 'right') === 'left';
 			sourceHandle = onLeft ? HANDLE.sourceLeft : HANDLE.sourceRight;

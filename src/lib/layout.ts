@@ -220,6 +220,40 @@ function layoutDirected(
 	return placed;
 }
 
+/**
+ * Recompute each node's `tone` from its real depth in the tree.
+ *
+ * tone drives the node colour (root = accent, branch = tinted, leaf = white), so
+ * it must follow the structure. Setting it only at creation time meant a node
+ * dragged under the root kept its old white "leaf" look — the "有些节点是主题色
+ * 有些是白色" inconsistency.
+ */
+export function syncTones(nodes: MindNode[], edges: Edge[]): MindNode[] {
+	const tree = buildTree(nodes, edges);
+	const depth = new Map<string, number>();
+
+	const walk = (id: string, d: number, stack: Set<string>) => {
+		if (stack.has(id)) return;
+		stack.add(id);
+		depth.set(id, d);
+		for (const k of tree.children.get(id) ?? []) walk(k, d + 1, stack);
+		stack.delete(id);
+	};
+
+	for (const r of tree.roots) walk(r, 0, new Set());
+	// detached nodes are their own roots
+	for (const n of nodes) {
+		if (!depth.has(n.id)) walk(n.id, 0, new Set());
+	}
+
+	return nodes.map((n) => {
+		const d = depth.get(n.id) ?? 0;
+		const tone: 'root' | 'branch' | 'leaf' = d === 0 ? 'root' : d === 1 ? 'branch' : 'leaf';
+		if (n.data?.tone === tone) return n;
+		return { ...n, data: { ...n.data, tone } };
+	});
+}
+
 /** Split the root's children into a left and a right half for the two-sided layouts. */
 function splitSides(childrenOfRoot: string[]): { right: string[]; left: string[] } {
 	const right: string[] = [];
@@ -230,6 +264,171 @@ function splitSides(childrenOfRoot: string[]): { right: string[]; left: string[]
 		else left.push(id);
 	});
 	return { right, left };
+}
+
+/**
+ * Two-sided layout (两侧平衡图): root in the middle, children split left/right.
+ *
+ * Both halves are laid out independently with the root at x = 0:
+ *  - the right half grows to +x
+ *  - the left half is MIRRORED to -x (otherwise both halves overlap on the
+ *    right side of the root, which is what made the structure look broken)
+ * Then the halves are aligned vertically on the root's own y.
+ */
+function layoutTwoSided(
+	nodes: MindNode[],
+	tree: Tree,
+	rootId: string,
+): Map<string, { x: number; y: number }> {
+	const kids = tree.children.get(rootId) ?? [];
+	const { right, left } = splitSides(kids);
+
+	// Deep-copy the children map (including every array) before overriding the
+	// root's list. A shallow `new Map(tree.children)` shares the arrays, so
+	// setting one tree's root children would also change the other's.
+	const cloneChildren = () => {
+		const m = new Map<string, string[]>();
+		for (const [k, v] of tree.children) m.set(k, [...v]);
+		return m;
+	};
+
+	const rightTree: Tree = { ...tree, children: cloneChildren() };
+	rightTree.children.set(rootId, [...right]);
+	const leftTree: Tree = { ...tree, children: cloneChildren() };
+	leftTree.children.set(rootId, [...left]);
+
+	const rightMap = layoutDirected(nodes, rightTree, 'right', { x: 0, y: 0 }, [rootId]);
+	const leftMap = layoutDirected(nodes, leftTree, 'left', { x: 0, y: 0 }, [rootId]);
+
+	// In both maps the root sits at x = 0. Align the halves vertically by the
+	// root's own y so no connector has to travel up/down just to reach the root.
+	const rootRightY = rightMap.get(rootId)?.y ?? 0;
+	const rootLeftY = leftMap.get(rootId)?.y ?? 0;
+
+	// Collect the ids that belong to each half. This matters: `layoutDirected`
+	// also places nodes it never visited (they default to x = 0, i.e. on top of
+	// the root), so blindly merging both maps would overwrite the right half's
+	// real positions with those placeholders.
+	const rightSet = new Set<string>();
+	const collect = (id: string) => {
+		if (rightSet.has(id)) return;
+		rightSet.add(id);
+		for (const k of rightTree.children.get(id) ?? []) collect(k);
+	};
+	collect(rootId);
+
+	const leftSet = new Set<string>();
+	const collectLeft = (id: string) => {
+		if (leftSet.has(id) || id === rootId) return;
+		leftSet.add(id);
+		for (const k of leftTree.children.get(id) ?? []) collectLeft(k);
+	};
+	for (const k of leftTree.children.get(rootId) ?? []) collectLeft(k);
+
+	const placed = new Map<string, { x: number; y: number }>();
+	for (const [id, p] of rightMap) {
+		if (!rightSet.has(id) && id !== rootId) continue;
+		placed.set(id, { x: p.x, y: p.y - rootRightY });
+	}
+	for (const [id, p] of leftMap) {
+		if (!leftSet.has(id)) continue;
+		placed.set(id, { x: p.x, y: p.y - rootLeftY });
+	}
+	return placed;
+}
+
+/**
+ * Fishbone layout (鱼骨图): the root is the "head" on the left, a horizontal
+ * spine runs right, and top-level branches alternate above / below the spine.
+ * Each branch's descendants stack further away from the spine.
+ *
+ * This is a genuinely different shape from the two-sided layout — it used to be
+ * a copy of it, which is why it looked broken.
+ */
+function layoutFishbone(
+	nodes: MindNode[],
+	tree: Tree,
+	rootId: string,
+): Map<string, { x: number; y: number }> {
+	const byId = new Map(nodes.map((n) => [n.id, n]));
+	const root = byId.get(rootId);
+	if (!root) return layoutDirected(nodes, tree, 'right', { x: 0, y: 0 });
+
+	const RIB_STEP = 74; // vertical distance from the spine to a rib's node
+	const LEVEL_STEP = 84; // extra vertical distance per deeper level
+	const SLOT_GAP = 34; // horizontal gap between rib slots
+	const DEPTH_INDENT = 54; // deeper levels shift right, so bones read diagonally
+
+	// horizontal extent each subtree needs
+	const widths = new Map<string, number>();
+	const measureWidth = (id: string, stack: Set<string>): number => {
+		if (widths.has(id)) return widths.get(id)!;
+		if (stack.has(id)) return NODE_WIDTH;
+		stack.add(id);
+		const kids = tree.children.get(id) ?? [];
+		let total = 0;
+		for (const k of kids) total += measureWidth(k, stack) + SLOT_GAP;
+		if (total > 0) total -= SLOT_GAP;
+		stack.delete(id);
+		const w = Math.max(NODE_WIDTH, total);
+		widths.set(id, w);
+		return w;
+	};
+
+	const kids = tree.children.get(rootId) ?? [];
+	for (const k of kids) measureWidth(k, new Set());
+
+	const placed = new Map<string, { x: number; y: number }>();
+
+	// head: vertically centred on the spine (spine y = 0)
+	const rootH = estimateHeight(root);
+	placed.set(rootId, { x: 0, y: -rootH / 2 });
+
+	/**
+	 * Place one rib (a top-level branch) and its subtree inside its horizontal
+	 * slot. `dir` is -1 above the spine, +1 below.
+	 *
+	 * Deeper levels move away from the spine AND shift right, so the bones read as
+	 * a fish skeleton rather than a plain indented tree.
+	 */
+	const placeRib = (id: string, startX: number, dir: number, level: number): void => {
+		const w = widths.get(id) ?? NODE_WIDTH;
+		const nodeH = estimateHeight(byId.get(id)!);
+		const depth = RIB_STEP + (level - 1) * LEVEL_STEP;
+
+		// horizontally centre inside the slot, then indent deeper levels rightwards
+		const x = startX + (w - NODE_WIDTH) / 2 + (level - 1) * DEPTH_INDENT;
+		// above the spine the box grows upward, below it grows downward
+		const y = dir < 0 ? -depth - nodeH : depth;
+		placed.set(id, { x, y });
+
+		const children = tree.children.get(id) ?? [];
+		if (!children.length) return;
+
+		const total =
+			children.reduce((s, k) => s + (widths.get(k) ?? NODE_WIDTH) + SLOT_GAP, 0) - SLOT_GAP;
+		let cursor = startX + Math.max(0, (w - total) / 2);
+		for (const k of children) {
+			placeRib(k, cursor, dir, level + 1);
+			cursor += (widths.get(k) ?? NODE_WIDTH) + SLOT_GAP;
+		}
+	};
+
+	// Lay the ribs out left-to-right, alternating above/below the spine so the
+	// bone pattern is balanced on both sides.
+	let cursor = NODE_WIDTH + 70; // leave room for the head
+	kids.forEach((id, i) => {
+		const dir = i % 2 === 0 ? -1 : 1;
+		placeRib(id, cursor, dir, 1);
+		cursor += (widths.get(id) ?? NODE_WIDTH) + SLOT_GAP;
+	});
+
+	// detached nodes become free-floating roots near the origin
+	for (const n of nodes) {
+		if (!placed.has(n.id)) placed.set(n.id, { x: 0, y: 0 });
+	}
+
+	return placed;
 }
 
 /**
@@ -264,36 +463,23 @@ export function layoutTree(
 			positioned = layoutDirected(nodes, tree, 'up', { x: 0, y: 0 });
 			break;
 
-		case 'both':
-		case 'fishbone': {
-			// Two-sided: root in the middle, alternating children left/right.
+		case 'both': {
 			const rootId = tree.roots[0];
-			const root = rootId ? byId.get(rootId) : undefined;
-			if (!root) {
+			if (!rootId) {
 				positioned = layoutDirected(nodes, tree, 'right', { x: 0, y: 0 });
 				break;
 			}
+			positioned = layoutTwoSided(nodes, tree, rootId);
+			break;
+		}
 
-			const kids = tree.children.get(rootId) ?? [];
-			const { right, left } = splitSides(kids);
-
-			// build two virtual trees by restricting the root's children
-			const rightTree: Tree = { ...tree, children: new Map(tree.children) };
-			rightTree.children.set(rootId, right);
-			const leftTree: Tree = { ...tree, children: new Map(tree.children) };
-			leftTree.children.set(rootId, left);
-
-			const rightMap = layoutDirected(nodes, rightTree, 'right', { x: 0, y: 0 }, [rootId]);
-			const leftMap = layoutDirected(nodes, leftTree, 'left', { x: 0, y: 0 }, [rootId]);
-
-			// left side is laid out with negative x, so shift it to sit left of root
-			positioned = new Map(rightMap);
-			const rootPos = rightMap.get(rootId) ?? { x: 0, y: 0 };
-			for (const [id, p] of leftMap) {
-				if (id === rootId) continue;
-				// mirror around the root: x -> 2*rootX - x  (plus the node width offset)
-				positioned.set(id, { x: 2 * rootPos.x - p.x - NODE_WIDTH, y: p.y });
+		case 'fishbone': {
+			const rootId = tree.roots[0];
+			if (!rootId) {
+				positioned = layoutDirected(nodes, tree, 'right', { x: 0, y: 0 });
+				break;
 			}
+			positioned = layoutFishbone(nodes, tree, rootId);
 			break;
 		}
 
@@ -317,10 +503,13 @@ export function layoutTree(
 		}
 	}
 
-	return nodes.map((n) => {
+	const laidOut = nodes.map((n) => {
 		const p = positioned.get(n.id);
 		return p ? { ...n, position: p } : n;
 	});
+
+	// tone must reflect the CURRENT depth, not whatever it was when created
+	return syncTones(laidOut, edges);
 }
 
 /** Drop edges whose endpoints no longer exist. */

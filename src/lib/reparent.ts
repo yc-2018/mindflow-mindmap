@@ -121,54 +121,89 @@ export function reparentEdges(
 	draggedId: string,
 	target: DropTarget,
 ): { edges: Edge[]; order: number } | null {
-	if (target.mode === 'detach') {
-		// nothing to do when it is already a root
-		if (!parentOf(edges, draggedId)) return null;
-		return { edges: edges.filter((e) => e.target !== draggedId), order: 0 };
+	return reparentMany(edges, [draggedId], target);
+}
+
+/**
+ * Same as `reparentEdges`, but moves SEVERAL nodes at once.
+ *
+ * This is what a multi-selection drag needs: dragging three selected nodes onto
+ * a target must attach all three, not just the first one that happens to be the
+ * drag anchor.
+ *
+ * Guard rules:
+ *  - ids that are descendants of another id in the same batch are skipped (moving
+ *    a parent already brings its subtree along)
+ *  - ids that are ancestors of the drop target are skipped (would create a cycle)
+ */
+export function reparentMany(
+	edges: Edge[],
+	draggedIds: string[],
+	target: DropTarget,
+): { edges: Edge[]; order: number } | null {
+	const ids = Array.from(new Set(draggedIds.filter(Boolean)));
+	if (!ids.length) return null;
+
+	// drop the ones that ride along with another moved ancestor
+	const moving = ids.filter(
+		(id) => !ids.some((other) => other !== id && isAncestor(edges, other, id)),
+	);
+
+	// never allow moving a node onto its own descendant / itself
+	const hoveredId = target.hoveredId;
+	if (target.mode !== 'detach' && hoveredId) {
+		if (moving.includes(hoveredId)) return null;
+		if (moving.some((id) => isAncestor(edges, id, hoveredId))) return null;
 	}
 
-	const hoveredId = target.hoveredId;
-	if (!hoveredId || hoveredId === draggedId) return null;
-	// a node cannot become a child/sibling of its own descendant
-	if (isAncestor(edges, draggedId, hoveredId)) return null;
-
-	// the dragged node's existing edge (if any) is replaced
-	const without = edges.filter((e) => e.target !== draggedId);
-
-	if (target.mode === 'child') {
-		const siblings = childrenOf(without, hoveredId);
+	if (target.mode === 'detach') {
+		// keep only nodes that actually have a parent
+		const withParent = moving.filter((id) => Boolean(parentOf(edges, id)));
+		if (!withParent.length) return null;
 		return {
-			edges: [...without, { id: `e_${draggedId}_${hoveredId}`, source: hoveredId, target: draggedId, type: 'mind' }],
-			order: siblings.length,
+			edges: edges.filter((e) => !withParent.includes(e.target)),
+			order: 0,
 		};
 	}
 
-	// sibling before/after: attach to the hovered node's parent
-	const newParent = parentOf(without, hoveredId);
+	if (!hoveredId) return null;
+
+	if (target.mode === 'child') {
+		// append them all as the target's children, in their original order
+		const without = edges.filter((e) => !moving.includes(e.target));
+		const existing = childrenOf(without, hoveredId);
+		const added = moving.map((id) => ({
+			id: `e_${id}_${hoveredId}`,
+			source: hoveredId,
+			target: id,
+			type: 'mind' as const,
+		}));
+		return { edges: [...without, ...added], order: existing.length };
+	}
+
+	// sibling before/after: insert the whole batch next to the hovered node
+	const newParent = parentOf(edges, hoveredId);
 	if (!newParent) {
-		// hovered node is a root: the dragged node becomes a root too, ordered
-		// relative to it. There is no edge to add.
+		// hovered node is a root: the batch becomes roots too
+		const without = edges.filter((e) => !moving.includes(e.target));
 		return { edges: without, order: target.mode === 'sibling-before' ? -1 : 1 };
 	}
 
-	// NOTE: take the parent's children from the ORIGINAL list (which still has the
-	// dragged node) so a node that was already a sibling is not dropped.
+	// take the parent's children from the ORIGINAL list (which still has the
+	// dragged nodes) so nodes that were already siblings are not dropped
 	const siblings = childrenOf(edges, newParent);
-	const idx = siblings.indexOf(hoveredId);
-	if (idx === -1) return null;
+	const anchorIdx = siblings.filter((id) => !moving.includes(id)).indexOf(hoveredId);
+	if (anchorIdx === -1) return null;
 
-	// remove the dragged node, then re-insert it at the requested slot
-	const withoutDragged = siblings.filter((id) => id !== draggedId);
-	const anchorIdx = withoutDragged.indexOf(hoveredId);
-	const insertAt =
-		target.mode === 'sibling-before' ? anchorIdx : anchorIdx + 1;
+	const withoutDragged = siblings.filter((id) => !moving.includes(id));
+	const insertAt = target.mode === 'sibling-before' ? anchorIdx : anchorIdx + 1;
 
 	const orderedTargets = [...withoutDragged];
-	orderedTargets.splice(insertAt, 0, draggedId);
+	orderedTargets.splice(insertAt, 0, ...moving);
 
 	// rebuild the parent's child edges in the new order, keeping ids where possible
 	const parentEdges = edges.filter((e) => e.source === newParent);
-	const others = without.filter((e) => e.source !== newParent);
+	const others = edges.filter((e) => e.source !== newParent && !moving.includes(e.target));
 	const rebuilt = orderedTargets.map((t) => {
 		const existing = parentEdges.find((e) => e.target === t);
 		return existing ?? { id: `e_${t}_${newParent}`, source: newParent, target: t, type: 'mind' };
