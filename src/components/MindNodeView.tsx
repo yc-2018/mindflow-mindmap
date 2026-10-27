@@ -4,6 +4,7 @@ import { ImagePlus, Loader2, Minus, Plus, X } from 'lucide-react';
 import { MAX_IMAGES, type MindNode } from '../lib/types';
 import { HANDLE } from '../lib/handles';
 import { useTheme } from '../lib/themeContext';
+import { resolveNodeStyle } from '../lib/themes';
 import MarkdownLabel from './MarkdownLabel';
 import FormatBar, { wrapSelection, type FormatKind } from './FormatBar';
 
@@ -132,8 +133,12 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 	};
 
 	const canAddMore = images.length + pending < MAX_IMAGES;
-	const palette = theme[tone];
+	// Rainbow themes colour each top-level branch differently; other themes ignore
+	// branchIndex and fall back to the plain tone colours.
+	const palette = resolveNodeStyle(theme, tone, data.branchIndex);
 	const dropTarget = data.dropTarget ?? null;
+	// the branch's own hue drives selection rings and the collapse badge too
+	const accent = theme.rainbow && typeof data.branchIndex === 'number' ? palette.border : theme.accent;
 
 	return (
 		<div
@@ -147,7 +152,7 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 					'--node-bg': palette.bg,
 					'--node-border': palette.border,
 					'--node-text': palette.text,
-					'--node-accent': theme.accent,
+					'--node-accent': accent,
 				} as React.CSSProperties
 			}
 		>

@@ -451,15 +451,26 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 
 			if (!origin || readOnly) return;
 
-			// A drop with no snap target and no detach intent is a no-op: the nodes
-			// return to their laid-out positions. This is the "随便动一下不脱落" rule.
-			if (!hint) {
-				setNodes((nds) => relayout(nds, origin.edges, structure));
-				return;
-			}
-
 			const movingIds = dragIdsRef.current.length ? dragIdsRef.current : [dragged.id];
 			dragIdsRef.current = [];
+
+			/**
+			 * No snap target: the user simply moved the node somewhere on the canvas.
+			 *
+			 * Instead of snapping it back (which made free dragging useless), we keep
+			 * the new position and mark the node `pinned`. Pinned nodes are excluded
+			 * from the auto-layout, so a manual arrangement survives later edits while
+			 * structural drops (onto another node) still re-flow the tree.
+			 */
+			if (!hint) {
+				setNodes((nds) =>
+					nds.map((n) =>
+						movingIds.includes(n.id) ? { ...n, data: { ...n.data, pinned: true } } : n,
+					),
+				);
+				markDirty();
+				return;
+			}
 
 			// NOTE: DropHint uses `id`; reparentMany expects `hoveredId` — map it.
 			const target =
@@ -478,7 +489,11 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			setEdges(nextEdges);
 			setNodes((nds) => {
 				const ordered = applySiblingOrder(nds, nextEdges);
-				return relayout(ordered, nextEdges, structure);
+				// a structural move overrides any manual placement for these nodes
+				const unpinned = ordered.map((n) =>
+					movingIds.includes(n.id) ? { ...n, data: { ...n.data, pinned: false } } : n,
+				);
+				return relayout(unpinned, nextEdges, structure);
 			});
 			markDirty();
 
@@ -994,7 +1009,16 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			: visible.nodes.some((n) => n.data.dropTarget)
 				? visible.nodes.map((n) => ({ ...n, data: { ...n.data, dropTarget: null } }))
 				: visible.nodes;
-		return { ...visible, nodes: marked, edges: routed };
+
+		// Rainbow themes need each connector to know its branch, so the hue of a
+		// link matches the subtree it belongs to.
+		const branchOf = new Map(visible.nodes.map((n) => [n.id, n.data.branchIndex ?? null]));
+		const coloured = routed.map((e) => {
+			const bi = branchOf.get(e.target) ?? branchOf.get(e.source) ?? null;
+			return { ...e, data: { ...e.data, branchIndex: bi } };
+		});
+
+		return { ...visible, nodes: marked, edges: coloured };
 	}, [nodes, edges, structure, dropHint]);
 
 	const stats = useMemo(() => ({ nodes: nodes.length, edges: edges.length }), [nodes, edges]);

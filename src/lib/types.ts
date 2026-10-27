@@ -39,6 +39,18 @@ export interface MindNodeData extends Record<string, unknown> {
 	order?: number;
 	/** Set while a drag hovers this node, so it can render a drop highlight. */
 	dropTarget?: 'child' | 'sibling-before' | 'sibling-after' | null;
+	/**
+	 * Ordinal of this node's top-level branch among the root's direct children.
+	 * `null` for a root itself. Rainbow themes use it to colour each branch.
+	 */
+	branchIndex?: number | null;
+	/**
+	 * True when the user has dragged this node to a custom spot.
+	 *
+	 * Such nodes keep their manual position instead of being snapped back by the
+	 * auto-layout, so free dragging and structural snapping can coexist.
+	 */
+	pinned?: boolean;
 }
 
 export type MindNode = Node<MindNodeData, 'mind'>;

@@ -9,6 +9,7 @@ import {
 } from '@xyflow/react';
 import { Trash2, X } from 'lucide-react';
 import { HANDLE } from '../lib/handles';
+import { resolveEdgeColor } from '../lib/themes';
 import { useTheme } from '../lib/themeContext';
 
 /** Window event fired when an edge's delete button is pressed. */
@@ -140,7 +141,17 @@ function MindEdge({
 	});
 
 	const active = selected || hovered;
-	const stroke = active ? theme.edge.active : (style?.stroke as string) || theme.edge.stroke;
+	// Rainbow themes colour each connector with its branch's hue, so a whole
+	// branch reads as one colour. The index rides on the edge data, set by the
+	// editor when it builds the visible graph.
+	const baseStroke =
+		(style?.stroke as string) ||
+		resolveEdgeColor(theme, (edgeData as { branchIndex?: number | null }).branchIndex);
+	const stroke = active
+		? theme.rainbow
+			? baseStroke
+			: theme.edge.active
+		: baseStroke;
 
 	useEffect(() => {
 		if (editing) {
