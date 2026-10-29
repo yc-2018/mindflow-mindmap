@@ -1,6 +1,7 @@
 import { memo, useMemo } from 'react';
 import { parseDoc, type MindNode } from '../lib/types';
-import { estimateHeight, NODE_WIDTH } from '../lib/layout';
+import { estimateHeight, NODE_WIDTH, pruneEdges, layoutTree, syncTones } from '../lib/layout';
+import { getStructure } from '../lib/structures';
 
 const PAD = 28;
 
@@ -21,8 +22,19 @@ interface Box {
 function Thumbnail({ data }: Props) {
 	const model = useMemo(() => {
 		const doc = parseDoc(data);
-		const nodes = doc.nodes;
-		if (!nodes.length) return null;
+		if (!doc.nodes.length) return null;
+
+		/**
+		 * Use the SAME layout the editor and the shared view use.
+		 *
+		 * The thumbnail used to draw the raw stored coordinates. Since the editor
+		 * re-runs the layout on load, a card could show a completely different
+		 * arrangement from the map itself — the reported "首页缩略图看到的也不一样".
+		 */
+		const pruned = pruneEdges(doc.nodes, doc.edges);
+		const toned = syncTones(doc.nodes, pruned);
+		const nodes = layoutTree(toned, pruned, getStructure(doc.structure));
+		const edges = pruned;
 
 		const boxes: Box[] = nodes.map((n) => ({ node: n, w: NODE_WIDTH, h: estimateHeight(n) }));
 
@@ -42,7 +54,7 @@ function Thumbnail({ data }: Props) {
 		const h = Math.max(1, maxY - minY);
 
 		const byId = new Map(boxes.map((b) => [b.node.id, b]));
-		const edges = doc.edges
+		const lines = edges
 			.map((e) => {
 				const s = byId.get(e.source);
 				const t = byId.get(e.target);
@@ -57,7 +69,7 @@ function Thumbnail({ data }: Props) {
 			})
 			.filter(Boolean) as { id: string; x1: number; y1: number; x2: number; y2: number }[];
 
-		return { boxes, edges, w, h, minX, minY };
+		return { boxes, lines, w, h, minX, minY };
 	}, [data]);
 
 	if (!model) {
@@ -79,7 +91,7 @@ function Thumbnail({ data }: Props) {
 				role="img"
 				aria-label="导图预览"
 			>
-				{model.edges.map((e) => {
+				{model.lines.map((e) => {
 					const mx = (e.x1 + e.x2) / 2;
 					return (
 						<path

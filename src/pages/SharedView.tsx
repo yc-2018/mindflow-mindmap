@@ -14,7 +14,9 @@ import MindNodeView from '../components/MindNodeView';
 import MindEdge from '../components/MindEdge';
 import { api } from '../lib/api';
 import { parseDoc, type MindNode } from '../lib/types';
-import { pruneEdges } from '../lib/layout';
+import { pruneEdges, layoutTree, syncTones } from '../lib/layout';
+import { getStructure } from '../lib/structures';
+import { childCounts } from '../lib/visibility';
 import { navigate } from '../lib/router';
 
 const nodeTypes = { mind: MindNodeView };
@@ -32,8 +34,27 @@ function SharedInner({ token }: { token: string }) {
 			.then(({ map }) => {
 				setTitle(map.title);
 				const doc = parseDoc(map.data);
-				setNodes(doc.nodes);
-				setEdges(pruneEdges(doc.nodes, doc.edges));
+				const pruned = pruneEdges(doc.nodes, doc.edges);
+
+				/**
+				 * Run the SAME layout pipeline the editor uses.
+				 *
+				 * Rendering the stored coordinates directly made a shared map look
+				 * different from what the owner sees: the editor re-runs `layoutTree`
+				 * on load, so any coordinates that were saved before a later layout
+				 * change no longer matched. Recomputing here guarantees the viewer
+				 * sees exactly the arrangement the editor shows.
+				 */
+				const toned = syncTones(doc.nodes, pruned);
+				const counts = childCounts(toned, pruned);
+				const withCounts = toned.map((n) => ({
+					...n,
+					data: { ...n.data, childCount: counts.get(n.id) ?? 0 },
+				}));
+				const laidOut = layoutTree(withCounts, pruned, getStructure(doc.structure));
+
+				setNodes(laidOut);
+				setEdges(pruned);
 				setState('ok');
 			})
 			.catch(() => setState('missing'));
