@@ -15,9 +15,21 @@ import { visit } from 'unist-util-visit';
 function remarkHighlight() {
 	return (tree: any) => {
 		visit(tree, 'text', (node: any, index: number | undefined, parent: any) => {
-			if (!parent || index === undefined || !node.value.includes('==')) return;
-			const parts = String(node.value).split(/(==[^=]+==)/g).filter(Boolean);
-			if (parts.length < 2) return;
+			if (!parent || index === undefined) return;
+			const value = String(node.value);
+			if (!value.includes('==')) return;
+
+			/**
+			 * Split on the highlight markers.
+			 *
+			 * `split` with a capture group returns the captured text as its own
+			 * element, so `==新主题==` yields ["==新主题=="] — a single element. The
+			 * old `parts.length < 2` guard treated that as "nothing to do", which
+			 * is exactly why a label consisting ONLY of a highlight stayed raw
+			 * while `前面 ==重点== 后面` worked.
+			 */
+			const parts = value.split(/(==[^=]+==)/g).filter(Boolean);
+			if (!parts.some((p: string) => /^==[^=]+==$/.test(p))) return;
 
 			const replacement = parts.map((part: string) => {
 				const m = /^==([^=]+)==$/.exec(part);

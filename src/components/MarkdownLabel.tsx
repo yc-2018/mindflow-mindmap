@@ -18,8 +18,15 @@ interface Props {
 function MarkdownLabel({ source, className }: Props) {
 	const text = source ?? '';
 
-	// no markdown syntax and no newlines -> render as a plain string
-	const isPlain = useMemo(() => !/[*_`~#>|[\]()!-]|\n/.test(text), [text]);
+	/**
+	 * Fast path: no markdown syntax and no newlines -> plain string.
+	 *
+	 * The character set must include `=` because `==text==` is our highlight
+	 * syntax. Leaving it out made `==新主题==` take the plain path, so the
+	 * Markdown renderer (and its highlight plugin) never ran and the user saw
+	 * the raw equals signs.
+	 */
+	const isPlain = useMemo(() => !/[*_`~#>|[\]()!=\n-]/.test(text), [text]);
 
 	if (isPlain) {
 		return <span className={`md-label md-label--plain${className ? ` ${className}` : ''}`}>{text}</span>;
