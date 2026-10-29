@@ -530,7 +530,13 @@ function placeLeftovers(
  *
  * The old implementation alternated purely by index, so adding one child
  * shifted every later child's parity — the entire map flipped sides and looked
- * scrambled. Priority 1+2 keep existing nodes where they already are.
+ * scrambled. Priorities 1+2 keep existing nodes where they already are.
+ *
+ * Finally, if every child ended up on the SAME side, the stored positions
+ * carried no left/right information at all (a freshly created map places each
+ * child to the right of its parent, so all of them look "right"). A two-sided
+ * layout with an empty half is just a one-sided map — the reported "两侧平衡图
+ * 全部在一边" — so in that case we distribute by order instead.
  */
 function splitSides(
 	childrenOfRoot: string[],
@@ -539,6 +545,7 @@ function splitSides(
 ): { right: string[]; left: string[] } {
 	const right: string[] = [];
 	const left: string[] = [];
+	const unknown: string[] = [];
 
 	for (const id of childrenOfRoot) {
 		const node = byId.get(id);
@@ -560,9 +567,26 @@ function splitSides(
 			continue;
 		}
 
-		// unknown position: balance the halves
+		unknown.push(id);
+	}
+
+	// nodes with no usable position info: balance the halves
+	for (const id of unknown) {
 		if (right.length <= left.length) right.push(id);
 		else left.push(id);
+	}
+
+	/**
+	 * Everything on one side means the geometry told us nothing. Alternate by
+	 * original order so the map is genuinely two-sided.
+	 *
+	 * A single child is left alone: there is nothing to balance, and forcing a
+	 * side would make a one-node branch jump to the left for no reason.
+	 */
+	if ((left.length === 0 || right.length === 0) && childrenOfRoot.length > 1) {
+		right.length = 0;
+		left.length = 0;
+		childrenOfRoot.forEach((id, i) => (i % 2 === 0 ? right.push(id) : left.push(id)));
 	}
 
 	return { right, left };

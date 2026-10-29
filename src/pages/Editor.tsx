@@ -602,14 +602,38 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			 * In the two-sided structure, giving the new child the correct side up
 			 * front stops it from being dumped on the opposite half — which used to
 			 * make the whole map appear to "curl up" when a node was added on one side.
+			 *
+			 * When the PARENT IS THE ROOT, there is no inherited side: we balance
+			 * whichever half currently has fewer children, so repeatedly adding to
+			 * the root still produces a genuinely two-sided map instead of pushing
+			 * everything to the right.
 			 */
 			const rootNode = nodes.find((n) => n.data.tone === 'root');
 			let side: 'left' | 'right' | undefined;
-			if (parent && rootNode && parent.id !== rootNode.id) {
-				if (parent.data.side === 'left' || parent.data.side === 'right') {
-					side = parent.data.side;
-				} else if (Number.isFinite(parent.position?.x)) {
-					side = parent.position.x < rootNode.position.x ? 'left' : 'right';
+			const twoSided = structure === 'both' || structure === 'fishbone';
+			if (parent && rootNode) {
+				if (parent.id !== rootNode.id) {
+					if (parent.data.side === 'left' || parent.data.side === 'right') {
+						side = parent.data.side;
+					} else if (Number.isFinite(parent.position?.x)) {
+						side = parent.position.x < rootNode.position.x ? 'left' : 'right';
+					}
+				} else if (twoSided) {
+					// parent is the root: balance the two halves
+					const kids = nodes.filter((n) =>
+						edges.some((e) => e.source === rootNode.id && e.target === n.id),
+					);
+					let l = 0;
+					let r = 0;
+					for (const k of kids) {
+						if (k.data.side === 'left') l++;
+						else if (k.data.side === 'right') r++;
+						else if (Number.isFinite(k.position?.x)) {
+							if (k.position.x < rootNode.position.x) l++;
+							else r++;
+						}
+					}
+					side = r <= l ? 'right' : 'left';
 				}
 			}
 
@@ -754,6 +778,18 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 							sideOf.set(id, side);
 							if (side === 'right') rightCount++;
 							else leftCount++;
+						}
+
+						/**
+						 * If every child landed on the same side, the geometry told us
+						 * nothing (a fresh map puts each child to the RIGHT of its parent,
+						 * so all of them look "right"). Alternate by order instead, or the
+						 * two-sided structure would render as a plain one-sided map — the
+						 * reported "两侧平衡图 全部在一边".
+						 */
+						if ((leftCount === 0 || rightCount === 0) && kids.length > 1) {
+							sideOf.clear();
+							kids.forEach((id, i) => sideOf.set(id, i % 2 === 0 ? 'right' : 'left'));
 						}
 
 						// propagate the side down each subtree
