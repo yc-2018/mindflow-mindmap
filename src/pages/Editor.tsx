@@ -22,13 +22,16 @@ import {
 	ChevronRight,
 	ChevronsDownUp,
 	ChevronsUpDown,
+	Copy,
 	CornerDownRight,
 	ImagePlus,
 	LayoutGrid,
+	Link2,
 	Maximize2,
 	Minimize2,
 	Plus,
 	Redo2,
+	Share2,
 	Trash2,
 	TriangleAlert,
 	Undo2,
@@ -116,6 +119,16 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	const [uploadingCount, setUploadingCount] = useState(0);
 	const [dropHint, setDropHint] = useState<DropHint | null>(null);
 	/**
+	 * Sharing state, mirrored from the document.
+	 *
+	 * `null` means not shared. The panel opens from the toolbar button; the
+	 * dashboard has the same feature, but having to leave the editor to share the
+	 * map you are looking at was awkward.
+	 */
+	const [shareToken, setShareToken] = useState<string | null>(null);
+	const [shareOpen, setShareOpen] = useState(false);
+	const [shareBusy, setShareBusy] = useState(false);
+	/**
 	 * Mirror of `dropHint` kept in a ref.
 	 *
 	 * `onNodeDragStop` must read the *final* hover target synchronously: React
@@ -199,6 +212,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 				setEdges(pruned);
 				setThemeId(doc.theme || 'classic');
 				setStructure(struct);
+				setShareToken(map.shareToken ?? null);
 				history.reset();
 				requestAnimationFrame(() => {
 					// the stored viewport may point at the old arrangement; re-fit
@@ -730,6 +744,43 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 		markDirty();
 		requestAnimationFrame(() => fitView({ padding: 0.25, duration: 300 }));
 	}, [edges, markDirty, fitView, withHistory, structure, relayoutAll]);
+
+	// ---- sharing ----
+	/** Turn sharing on (or off) and keep the local token in sync. */
+	const toggleShare = useCallback(
+		async (enabled: boolean) => {
+			if (shareBusy) return;
+			setShareBusy(true);
+			try {
+				const { shareToken: token } = await api.setShare(mapId, enabled);
+				setShareToken(token);
+				if (enabled && token) {
+					const url = `${window.location.origin}/s/${token}`;
+					await navigator.clipboard.writeText(url).catch(() => undefined);
+					toast('分享链接已复制', 'success');
+				} else {
+					toast('已关闭分享', 'success');
+				}
+			} catch {
+				toast('操作失败', 'error');
+			} finally {
+				setShareBusy(false);
+			}
+		},
+		[mapId, shareBusy],
+	);
+
+	/** Copy the current link again (the panel's "复制链接" button). */
+	const copyShareLink = useCallback(async () => {
+		if (!shareToken) return;
+		const url = `${window.location.origin}/s/${shareToken}`;
+		try {
+			await navigator.clipboard.writeText(url);
+			toast('分享链接已复制', 'success');
+		} catch {
+			toast('复制失败，请手动选择链接', 'error');
+		}
+	}, [shareToken]);
 
 	// ---- structure switch ----
 	const changeStructure = useCallback(
@@ -1383,6 +1434,16 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 						</button>
 
 						<button
+							className={`btn-ghost btn-icon-text${shareToken ? ' is-active' : ''}`}
+							onClick={() => setShareOpen(true)}
+							disabled={readOnly}
+							title={shareToken ? '已分享 · 点击管理链接' : '生成只读分享链接'}
+						>
+							{shareToken ? <Link2 size={15} strokeWidth={1.9} /> : <Share2 size={15} strokeWidth={1.9} />}
+							分享
+						</button>
+
+						<button
 							className="icon-btn"
 							onClick={toggleFullscreen}
 							title={fullscreen ? '退出全屏' : '全屏'}
@@ -1512,6 +1573,69 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 						</div>
 					) : null}
 				</div>
+
+				{/*
+				  Share panel: opens from the toolbar. Kept minimal on purpose —
+				  one link, one copy button, one toggle. Sharing is a two-state
+				  feature, not a settings screen.
+				*/}
+				{shareOpen ? (
+					<div className="modal-mask" onClick={() => setShareOpen(false)}>
+						<div className="modal share-modal" onClick={(e) => e.stopPropagation()}>
+							<h3>分享「{title || '未命名导图'}」</h3>
+
+							{shareToken ? (
+								<>
+									<p className="modal__hint">
+										任何拿到链接的人都可以查看这张导图（只读，不能修改）。
+									</p>
+									<div className="share-row">
+										<input
+											readOnly
+											value={`${window.location.origin}/s/${shareToken}`}
+											onFocus={(e) => e.currentTarget.select()}
+										/>
+										<button className="btn-primary btn-icon-text" onClick={() => void copyShareLink()}>
+											<Copy size={15} strokeWidth={1.9} />
+											复制
+										</button>
+									</div>
+									<div className="modal__actions">
+										<button
+											className="btn-ghost danger"
+											onClick={() => void toggleShare(false)}
+											disabled={shareBusy}
+										>
+											{shareBusy ? '处理中…' : '关闭分享'}
+										</button>
+										<button className="btn-ghost" onClick={() => setShareOpen(false)}>
+											完成
+										</button>
+									</div>
+								</>
+							) : (
+								<>
+									<p className="modal__hint">
+										生成一条只读链接，发给别人就能查看这张导图。链接可以随时关闭。
+									</p>
+									<div className="modal__actions">
+										<button className="btn-ghost" onClick={() => setShareOpen(false)}>
+											取消
+										</button>
+										<button
+											className="btn-primary btn-icon-text"
+											onClick={() => void toggleShare(true)}
+											disabled={shareBusy}
+										>
+											<Share2 size={15} strokeWidth={1.9} />
+											{shareBusy ? '生成中…' : '生成分享链接'}
+										</button>
+									</div>
+								</>
+							)}
+						</div>
+					</div>
+				) : null}
 
 				{lightbox && current ? (
 					<div className="lightbox" onClick={() => setLightbox(null)}>

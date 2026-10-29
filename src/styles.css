@@ -1558,6 +1558,10 @@ select {
 	transition: all 0.14s ease;
 	z-index: 5;
 	opacity: 0.55;
+	/* React Flow sets pointer-events:none on nodes whose selection is disabled
+	   (the shared view). The collapse badge is the one control a viewer may use,
+	   so it opts back in explicitly. */
+	pointer-events: all;
 }
 .mind-node:hover .mind-node__collapse {
 	opacity: 1;
@@ -1710,6 +1714,15 @@ select {
 .mind-edge-label:hover {
 	border-color: var(--line-strong);
 	color: var(--text);
+}
+/* read-only variant: it is plain text, so it must not look clickable */
+.mind-edge-label--static {
+	cursor: default;
+	pointer-events: none;
+}
+.mind-edge-label--static:hover {
+	border-color: var(--line);
+	color: var(--text-dim);
 }
 
 /* edge midpoint container: label + hover delete button */

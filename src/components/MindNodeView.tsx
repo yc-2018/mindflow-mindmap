@@ -4,6 +4,7 @@ import { ImagePlus, Loader2, Minus, Plus, X } from 'lucide-react';
 import { MAX_IMAGES, type MindNode } from '../lib/types';
 import { HANDLE } from '../lib/handles';
 import { useTheme } from '../lib/themeContext';
+import { useReadOnly } from '../lib/themeContext';
 import { resolveNodeStyle } from '../lib/themes';
 import MarkdownLabel from './MarkdownLabel';
 import FormatBar, { wrapSelection, type FormatKind } from './FormatBar';
@@ -34,7 +35,10 @@ export const LABEL_COMMIT_EVENT = 'mindflow:label-commit';
  */
 function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 	const tone = data.tone ?? 'leaf';
-	const editing = Boolean(data.editing);
+	const readOnly = useReadOnly();
+	// in the shared view a node must never enter edit mode, even if the stored
+	// document still carries a leftover `editing` flag
+	const editing = Boolean(data.editing) && !readOnly;
 	const images = data.images ?? [];
 	const pending = data.uploading ?? 0;
 	const childCount = data.childCount ?? 0;
@@ -245,21 +249,23 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 									);
 								}}
 							/>
-							<button
-								type="button"
-								className="mind-thumb__remove"
-								title="删除这张图片"
-								onClick={(e) => {
-									e.stopPropagation();
-									window.dispatchEvent(
-										new CustomEvent(REMOVE_IMAGE_EVENT, {
-											detail: { nodeId: id, imageId: img.id },
-										}),
-									);
-								}}
-							>
-								<X size={9} strokeWidth={3} />
-							</button>
+							{readOnly ? null : (
+								<button
+									type="button"
+									className="mind-thumb__remove"
+									title="删除这张图片"
+									onClick={(e) => {
+										e.stopPropagation();
+										window.dispatchEvent(
+											new CustomEvent(REMOVE_IMAGE_EVENT, {
+												detail: { nodeId: id, imageId: img.id },
+											}),
+										);
+									}}
+								>
+									<X size={9} strokeWidth={3} />
+								</button>
+							)}
 						</div>
 					))}
 

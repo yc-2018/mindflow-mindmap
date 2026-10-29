@@ -9,3 +9,19 @@ export const ThemeProvider = ThemeContext.Provider;
 export function useTheme(): Theme {
 	return useContext(ThemeContext);
 }
+
+/**
+ * Read-only flag for the whole canvas.
+ *
+ * The shared view renders the same node/edge components as the editor, so those
+ * components need to know whether editing affordances (delete buttons, in-place
+ * text editing, collapse toggles) should be shown. Threading a prop through
+ * React Flow's nodeTypes/edgeTypes is not possible, hence a context.
+ */
+const ReadOnlyContext = createContext(false);
+
+export const ReadOnlyProvider = ReadOnlyContext.Provider;
+
+export function useReadOnly(): boolean {
+	return useContext(ReadOnlyContext);
+}

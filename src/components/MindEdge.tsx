@@ -10,7 +10,7 @@ import {
 import { Trash2, X } from 'lucide-react';
 import { HANDLE } from '../lib/handles';
 import { resolveEdgeColor } from '../lib/themes';
-import { useTheme } from '../lib/themeContext';
+import { useReadOnly, useTheme } from '../lib/themeContext';
 
 /** Window event fired when an edge's delete button is pressed. */
 export const REMOVE_EDGE_EVENT = 'mindflow:remove-edge';
@@ -124,6 +124,7 @@ function MindEdge({
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const { updateEdgeData } = useReactFlow();
 	const theme = useTheme();
+	const readOnly = useReadOnly();
 
 	const edgeData = (data ?? {}) as MindEdgeData;
 	const editing = Boolean(edgeData.editing);
@@ -207,7 +208,11 @@ function MindEdge({
 					onMouseEnter={() => setHovered(true)}
 					onMouseLeave={() => setHovered(false)}
 				>
-					{editing ? (
+					{readOnly ? (
+						shownLabel ? (
+							<span className="mind-edge-label mind-edge-label--static">{shownLabel}</span>
+						) : null
+					) : editing ? (
 						<input
 							ref={inputRef}
 							className="mind-edge-input"
@@ -232,7 +237,7 @@ function MindEdge({
 						</button>
 					) : null}
 
-					{hovered && !editing ? (
+					{hovered && !editing && !readOnly ? (
 						<button
 							type="button"
 							className="mind-edge-del"

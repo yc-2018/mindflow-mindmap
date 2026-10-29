@@ -10,14 +10,17 @@ import {
 import { House, Link2Off } from 'lucide-react';
 import '@xyflow/react/dist/style.css';
 
-import MindNodeView from '../components/MindNodeView';
+import MindNodeView, { TOGGLE_COLLAPSE_EVENT } from '../components/MindNodeView';
 import MindEdge from '../components/MindEdge';
 import { api } from '../lib/api';
 import { parseDoc, type MindNode } from '../lib/types';
 import { pruneEdges, layoutTree, syncTones } from '../lib/layout';
-import { getStructure } from '../lib/structures';
-import { childCounts } from '../lib/visibility';
+import { getStructure, type StructureId } from '../lib/structures';
+import { withAdaptiveHandles } from '../lib/handles';
+import { childCounts, visibleGraph } from '../lib/visibility';
 import { navigate } from '../lib/router';
+import { ReadOnlyProvider, ThemeProvider } from '../lib/themeContext';
+import { getTheme } from '../lib/themes';
 
 const nodeTypes = { mind: MindNodeView };
 const edgeTypes = { mind: MindEdge };
@@ -26,7 +29,30 @@ function SharedInner({ token }: { token: string }) {
 	const [title, setTitle] = useState('');
 	const [nodes, setNodes] = useState<MindNode[]>([]);
 	const [edges, setEdges] = useState<Edge[]>([]);
+	const [structure, setStructure] = useState<StructureId>('balanced');
+	const [themeId, setThemeId] = useState<string>('classic');
 	const [state, setState] = useState<'loading' | 'ok' | 'missing'>('loading');
+
+	/**
+	 * Let viewers collapse/expand branches.
+	 *
+	 * That is the only interaction a read-only page offers: it changes what is
+	 * visible, not the document. Everything else (editing, deleting, dragging) is
+	 * suppressed by the readOnly context.
+	 */
+	useEffect(() => {
+		const onToggle = (e: Event) => {
+			const detail = (e as CustomEvent<{ id: string }>).detail;
+			if (!detail?.id) return;
+			setNodes((nds) =>
+				nds.map((n) =>
+					n.id === detail.id ? { ...n, data: { ...n.data, collapsed: !n.data.collapsed } } : n,
+				),
+			);
+		};
+		window.addEventListener(TOGGLE_COLLAPSE_EVENT, onToggle);
+		return () => window.removeEventListener(TOGGLE_COLLAPSE_EVENT, onToggle);
+	}, []);
 
 	useEffect(() => {
 		api
@@ -45,16 +71,26 @@ function SharedInner({ token }: { token: string }) {
 				 * change no longer matched. Recomputing here guarantees the viewer
 				 * sees exactly the arrangement the editor shows.
 				 */
+				const struct = getStructure(doc.structure);
 				const toned = syncTones(doc.nodes, pruned);
 				const counts = childCounts(toned, pruned);
 				const withCounts = toned.map((n) => ({
 					...n,
 					data: { ...n.data, childCount: counts.get(n.id) ?? 0 },
 				}));
-				const laidOut = layoutTree(withCounts, pruned, getStructure(doc.structure));
+				const laidOut = layoutTree(withCounts, pruned, struct);
 
+				/**
+				 * Route the connectors with the same adaptive-handle pass.
+				 *
+				 * Without it the edges kept whatever handles were stored, and after a
+				 * layout change those pointed at the wrong side of a node — which is
+				 * why shared links showed tangled, looping lines.
+				 */
 				setNodes(laidOut);
-				setEdges(pruned);
+				setEdges(withAdaptiveHandles(laidOut, pruned, struct));
+				setStructure(struct);
+				setThemeId(doc.theme || 'classic');
 				setState('ok');
 			})
 			.catch(() => setState('missing'));
@@ -86,6 +122,10 @@ function SharedInner({ token }: { token: string }) {
 		);
 	}
 
+	// hide collapsed subtrees, exactly like the editor does
+	const visible = visibleGraph(nodes, edges);
+	const shownEdges = withAdaptiveHandles(visible.nodes, visible.edges, structure);
+
 	return (
 		<div className="editor">
 			<header className="editor__bar">
@@ -101,23 +141,37 @@ function SharedInner({ token }: { token: string }) {
 				</div>
 			</header>
 			<div className="editor__canvas">
-				<ReactFlow
-					<MindNode, Edge>
-					nodes={nodes}
-					edges={edges}
-					nodeTypes={nodeTypes}
-					edgeTypes={edgeTypes}
-					fitView
-					minZoom={0.15}
-					maxZoom={2.5}
-					proOptions={{ hideAttribution: true }}
-					nodesDraggable={false}
-					nodesConnectable={false}
-					elementsSelectable={false}
-				>
-					<Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#d8dbe6" />
-					<Controls showInteractive={false} />
-				</ReactFlow>
+				{/*
+				  The shared view reuses the editor's node/edge components, so it must
+				  provide the same contexts: the theme for colours, and readOnly so the
+				  components hide editing affordances (delete buttons, in-place text
+				  editing). Only the collapse/expand toggle stays usable — it just
+				  changes what is visible, which a viewer is allowed to do.
+				*/}
+				<ThemeProvider value={getTheme(themeId)}>
+					<ReadOnlyProvider value={true}>
+						<ReactFlow
+							<MindNode, Edge>
+							nodes={visible.nodes}
+							edges={shownEdges}
+							nodeTypes={nodeTypes}
+							edgeTypes={edgeTypes}
+							fitView
+							minZoom={0.15}
+							maxZoom={2.5}
+							proOptions={{ hideAttribution: true }}
+							nodesDraggable={false}
+							nodesConnectable={false}
+							/* Keep nodes interactive: the collapse toggle lives inside
+							   the node and must stay clickable. Selection is disabled
+							   separately, so nothing else can be dragged or edited. */
+							elementsSelectable={false}
+						>
+							<Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#d8dbe6" />
+							<Controls showInteractive={false} />
+						</ReactFlow>
+					</ReadOnlyProvider>
+				</ThemeProvider>
 			</div>
 		</div>
 	);
