@@ -2588,3 +2588,15 @@ select {
 .thumb__md-render strong {
 	color: #1e293b;
 }
+
+/* per-kind card icons: a markdown note, a drawio diagram and a mind map must be
+   distinguishable at a glance in the grid */
+.card__icon--mind {
+	color: var(--green, #34c48b);
+}
+.card__icon--md {
+	color: #6366f1;
+}
+.card__icon--drawio {
+	color: #f76b15;
+}

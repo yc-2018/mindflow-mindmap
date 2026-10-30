@@ -513,7 +513,20 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 
 								<footer className="card__meta">
 									<div className="card__title-row">
-										<Network size={14} strokeWidth={1.9} className="card__icon" />
+										{/*
+										  A distinct icon per document kind. Using one icon for
+										  everything made a markdown note, a drawio diagram and a
+										  mind map look identical in the grid — the reported
+										  "图表和导图的首页图标是一样的".
+										*/}
+										{(() => {
+											const k = docKind(parseDoc(m.data));
+											if (k === 'md')
+												return <FileText size={14} strokeWidth={1.9} className="card__icon card__icon--md" />;
+											if (k === 'drawio')
+												return <PenLine size={14} strokeWidth={1.9} className="card__icon card__icon--drawio" />;
+											return <Network size={14} strokeWidth={1.9} className="card__icon card__icon--mind" />;
+										})()}
 										<span className="card__title" title={m.title}>
 											{m.title}
 										</span>
