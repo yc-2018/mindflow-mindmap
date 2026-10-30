@@ -227,11 +227,13 @@ function SharedInner({ token }: { token: string }) {
 				<div className="drawio-editor__body">
 					{/* Self-hosted viewer: `?lightbox=1` renders the diagram read-only
 					    from the XML in the URL fragment, with no editor chrome. Using our
-					    own copy avoids the official host's framing restrictions. */}
+					    own copy avoids the official host's framing restrictions.
+					    `/drawio/` (trailing slash) skips the 307 that `/drawio/index.html`
+					    would otherwise trigger. */}
 					<iframe
 						className="drawio-editor__frame"
 						title="draw.io viewer"
-						src={`/drawio/index.html?lightbox=1&highlight=0000ff&edit=_blank&nav=1&title=${encodeURIComponent(title)}#R${encodeURIComponent(drawioXml)}`}
+						src={`/drawio/?lightbox=1&highlight=0000ff&edit=_blank&nav=1&title=${encodeURIComponent(title)}#R${encodeURIComponent(drawioXml)}`}
 					/>
 				</div>
 			</div>

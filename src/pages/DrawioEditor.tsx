@@ -28,8 +28,15 @@ interface Props {
  *
  * We keep the XML in the document (`drawioXml`), so the same value powers the
  * editor, export, import and the read-only share view.
+ *
+ * Path note: uses `/drawio/` (with the trailing slash) rather than
+ * `/drawio/index.html` — Cloudflare's asset layer answers the explicit `.html`
+ * path with a 307 to the directory form, and following that inside an iframe
+ * costs an extra round trip.
  */
-const EMBED_URL = '/drawio/index.html?embed=1&ui=min&spin=1&proto=json&noSaveBtn=1&noExitBtn=1&libraries=1&noExitBtn=1';
+const DRAWIO_BASE = '/drawio/';
+
+const EMBED_URL = `${DRAWIO_BASE}?embed=1&ui=min&spin=1&proto=json&noSaveBtn=1&noExitBtn=1&libraries=1`;
 
 export default function DrawioEditor({
 	title,
