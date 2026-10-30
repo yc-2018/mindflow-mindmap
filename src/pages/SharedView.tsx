@@ -12,8 +12,9 @@ import '@xyflow/react/dist/style.css';
 
 import MindNodeView, { TOGGLE_COLLAPSE_EVENT } from '../components/MindNodeView';
 import MindEdge from '../components/MindEdge';
+import MarkdownRenderer from '../components/MarkdownRenderer';
 import { api } from '../lib/api';
-import { parseDoc, type MindNode } from '../lib/types';
+import { parseDoc, docKind, type MindNode, type DocKind } from '../lib/types';
 import { pruneEdges, layoutTree, syncTones } from '../lib/layout';
 import { getStructure, type StructureId } from '../lib/structures';
 import { withAdaptiveHandles } from '../lib/handles';
@@ -38,6 +39,9 @@ function SharedInner({ token }: { token: string }) {
 	const [structure, setStructure] = useState<StructureId>('balanced');
 	const [themeId, setThemeId] = useState<string>('classic');
 	const [state, setState] = useState<'loading' | 'ok' | 'missing'>('loading');
+	const [kind, setKind] = useState<DocKind>('mind');
+	const [markdown, setMarkdown] = useState('');
+	const [drawioXml, setDrawioXml] = useState('');
 
 	/**
 	 * Latest values for the collapse handler.
@@ -89,6 +93,24 @@ function SharedInner({ token }: { token: string }) {
 			.then(({ map }) => {
 				setTitle(map.title);
 				const doc = parseDoc(map.data);
+				const k = docKind(doc);
+				setKind(k);
+
+				/**
+				 * Markdown and drawio documents render on their own; only the mind
+				 * map needs the layout pipeline below.
+				 */
+				if (k === 'md') {
+					setMarkdown(doc.markdown ?? '');
+					setState('ok');
+					return;
+				}
+				if (k === 'drawio') {
+					setDrawioXml(doc.drawioXml ?? '');
+					setState('ok');
+					return;
+				}
+
 				const pruned = pruneEdges(doc.nodes, doc.edges);
 
 				/**
@@ -148,6 +170,69 @@ function SharedInner({ token }: { token: string }) {
 						<House size={16} strokeWidth={1.9} />
 						返回首页
 					</button>
+				</div>
+			</div>
+		);
+	}
+
+	/**
+	 * Markdown document: render the source with the same renderer the editor
+	 * previews with, so a shared note looks identical to the owner's preview.
+	 */
+	if (kind === 'md') {
+		return (
+			<div className="editor">
+				<header className="editor__bar">
+					<div className="editor__left">
+						<span className="editor__title shared-title">{title}</span>
+						<span className="save-state">只读分享</span>
+					</div>
+					<div className="editor__right">
+						<button className="btn-ghost btn-icon-text" onClick={() => navigate('/')}>
+							<House size={15} strokeWidth={1.9} />
+							返回首页
+						</button>
+					</div>
+				</header>
+				<div className="md-editor__body md-editor__body--readonly">
+					<div className="md-editor__preview md-editor__preview--full">
+						<div className="md-label md-editor__rendered">
+							<MarkdownRenderer source={markdown || '*（空文档）*'} />
+						</div>
+					</div>
+				</div>
+			</div>
+		);
+	}
+
+	/**
+	 * draw.io document: show it through the official read-only viewer, which
+	 * understands the same XML we store.
+	 */
+	if (kind === 'drawio') {
+		return (
+			<div className="editor">
+				<header className="editor__bar">
+					<div className="editor__left">
+						<span className="editor__title shared-title">{title}</span>
+						<span className="save-state">只读分享</span>
+					</div>
+					<div className="editor__right">
+						<button className="btn-ghost btn-icon-text" onClick={() => navigate('/')}>
+							<House size={15} strokeWidth={1.9} />
+							返回首页
+						</button>
+					</div>
+				</header>
+				<div className="drawio-editor__body">
+					{/* Self-hosted viewer: `?lightbox=1` renders the diagram read-only
+					    from the XML in the URL fragment, with no editor chrome. Using our
+					    own copy avoids the official host's framing restrictions. */}
+					<iframe
+						className="drawio-editor__frame"
+						title="draw.io viewer"
+						src={`/drawio/index.html?lightbox=1&highlight=0000ff&edit=_blank&nav=1&title=${encodeURIComponent(title)}#R${encodeURIComponent(drawioXml)}`}
+					/>
 				</div>
 			</div>
 		);

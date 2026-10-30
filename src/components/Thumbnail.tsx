@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react';
-import { parseDoc, type MindNode } from '../lib/types';
+import { parseDoc, docKind, type MindNode } from '../lib/types';
 import { estimateHeight, NODE_WIDTH, pruneEdges, layoutTree, syncTones } from '../lib/layout';
 import { getStructure } from '../lib/structures';
 
@@ -20,7 +20,41 @@ interface Box {
  * a dashboard can hold dozens of cards, and mounting one flow per card is far too heavy.
  */
 function Thumbnail({ data }: Props) {
+	const kind = useMemo(() => docKind(parseDoc(data)), [data]);
+
+	/**
+	 * Markdown documents get a text preview: the first few non-empty lines,
+	 * stripped of markdown markers. That reads far better on a card than an
+	 * "empty map" placeholder.
+	 */
+	const mdPreview = useMemo(() => {
+		if (kind !== 'md') return null;
+		const doc = parseDoc(data);
+		const lines = (doc.markdown ?? '')
+			.split('\n')
+			.map((l) => l.replace(/^[#>\-*\d.\s]+/, '').replace(/[*_`~]/g, '').trim())
+			.filter(Boolean)
+			.slice(0, 7);
+		return lines;
+	}, [data, kind]);
+
+	/** draw.io diagrams show the node labels found in their XML. */
+	const drawioPreview = useMemo(() => {
+		if (kind !== 'drawio') return null;
+		const doc = parseDoc(data);
+		const xml = doc.drawioXml ?? '';
+		const labels: string[] = [];
+		const re = /<mxCell[^>]*\bvalue="([^"]+)"/g;
+		let m: RegExpExecArray | null;
+		while ((m = re.exec(xml)) && labels.length < 6) {
+			const v = m[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+			if (v) labels.push(v);
+		}
+		return labels;
+	}, [data, kind]);
+
 	const model = useMemo(() => {
+		if (kind !== 'mind') return null;
 		const doc = parseDoc(data);
 		if (!doc.nodes.length) return null;
 
@@ -71,6 +105,32 @@ function Thumbnail({ data }: Props) {
 
 		return { boxes, lines, w, h, minX, minY };
 	}, [data]);
+
+	if (kind === 'md') {
+		return (
+			<div className="thumb thumb--text">
+				{(mdPreview ?? []).map((line, i) => (
+					<span key={i} className={`thumb__line${i === 0 ? ' thumb__line--head' : ''}`}>
+						{line}
+					</span>
+				))}
+				{(mdPreview ?? []).length === 0 ? <span className="thumb__empty-note">空白文档</span> : null}
+			</div>
+		);
+	}
+
+	if (kind === 'drawio') {
+		return (
+			<div className="thumb thumb--text">
+				{(drawioPreview ?? []).map((label, i) => (
+					<span key={i} className={`thumb__line thumb__chip${i === 0 ? ' thumb__chip--first' : ''}`}>
+						{label}
+					</span>
+				))}
+				{(drawioPreview ?? []).length === 0 ? <span className="thumb__empty-note">空白图表</span> : null}
+			</div>
+		);
+	}
 
 	if (!model) {
 		return (

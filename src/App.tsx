@@ -6,7 +6,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import Admin from './pages/Admin';
-import Editor from './pages/Editor';
+import MapPage from './pages/MapPage';
 import SharedView from './pages/SharedView';
 
 export default function App() {
@@ -78,7 +78,7 @@ export default function App() {
 	}
 
 	let content: React.ReactNode;
-	if (mapMatch) content = <Editor mapId={mapMatch[1]} />;
+	if (mapMatch) content = <MapPage mapId={mapMatch[1]} />;
 	else if (isAdminPage) content = user.role === 'admin' ? <Admin user={user} /> : <Dashboard user={user} onLogout={logout} />;
 	else content = <Dashboard user={user} onLogout={logout} />;
 

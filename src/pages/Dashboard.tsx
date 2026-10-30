@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
 	ArrowDownWideNarrow,
+	ChevronDown,
 	Download,
+	FileText,
 	FolderOpen,
 	Link2,
 	Lock,
 	LogOut,
 	Map as MapIcon,
 	Network,
+	PenLine,
 	Pencil,
 	Plus,
 	RefreshCw,
@@ -24,7 +27,7 @@ import { Logo } from '../components/Logo';
 import { api, ApiError, type MapSummary, type User } from '../lib/api';
 import { navigate } from '../lib/router';
 import { toast } from '../lib/toast';
-import { parseDoc, serializeDoc, type MapDoc, type MindNode } from '../lib/types';
+import { parseDoc, serializeDoc, starterDocOf, docKind, type MapDoc, type MindNode, type DocKind } from '../lib/types';
 import { layoutTree } from '../lib/layout';
 import { importDoc } from '../lib/import';
 import { uid } from '../lib/uid';
@@ -34,7 +37,14 @@ interface DashboardProps {
 	onLogout: () => void;
 }
 
-function starterDoc(): string {
+/**
+ * Starter document for a newly created map.
+ *
+ * `kind` decides the shape: a mind map gets a centred root, a markdown note gets
+ * a small template, and a draw.io diagram gets a one-node page.
+ */
+function starterDoc(kind: DocKind = 'mind'): string {
+	if (kind !== 'mind') return serializeDoc(starterDocOf(kind));
 	const root: MindNode = {
 		id: uid(),
 		type: 'mind',
@@ -65,6 +75,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 	const [sort, setSort] = useState<'updated' | 'created' | 'title'>('updated');
 	const [query, setQuery] = useState('');
 	const [importing, setImporting] = useState(false);
+	const [newMenuOpen, setNewMenuOpen] = useState(false);
 	const fileRef = useRef<HTMLInputElement | null>(null);
 
 	const load = useCallback(async () => {
@@ -86,18 +97,34 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 		void load();
 	}, [load]);
 
-	const createMap = useCallback(async () => {
-		if (creating) return;
-		setCreating(true);
-		try {
-			const { map } = await api.createMap('未命名导图', starterDoc());
-			navigate(`/map/${map.id}`);
-		} catch {
-			toast('创建失败', 'error');
-		} finally {
-			setCreating(false);
-		}
-	}, [creating]);
+	/**
+	 * Create a new document.
+	 *
+	 * The kind is picked from the small menu next to the button, so a user can
+	 * start a mind map, a Markdown note or a draw.io diagram without leaving the
+	 * dashboard.
+	 */
+	const createMap = useCallback(
+		async (kind: DocKind = 'mind') => {
+			if (creating) return;
+			setCreating(true);
+			setNewMenuOpen(false);
+			try {
+				const titles: Record<DocKind, string> = {
+					mind: '未命名导图',
+					md: '未命名文档',
+					drawio: '未命名图表',
+				};
+				const { map } = await api.createMap(titles[kind], starterDoc(kind));
+				navigate(`/map/${map.id}`);
+			} catch {
+				toast('创建失败', 'error');
+			} finally {
+				setCreating(false);
+			}
+		},
+		[creating],
+	);
 
 	const doDelete = useCallback(async (m: MapSummary) => {
 		try {
@@ -172,24 +199,51 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 		}
 	}, [renaming]);
 
+	/**
+	 * Export a document in its NATIVE format.
+	 *
+	 *  - mind map  → `.json` (our own round-trippable format)
+	 *  - markdown  → `.md`
+	 *  - drawio    → `.drawio` (the raw `<mxfile>` XML)
+	 */
 	const download = useCallback(async (m: MapSummary) => {
 		const doc = parseDoc(m.data);
-		const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+		const kind = docKind(doc);
+		const base = m.title || '未命名';
+
+		let blob: Blob;
+		let filename: string;
+		let label: string;
+		if (kind === 'md') {
+			blob = new Blob([doc.markdown ?? ''], { type: 'text/markdown;charset=utf-8' });
+			filename = `${base}.md`;
+			label = 'Markdown';
+		} else if (kind === 'drawio') {
+			blob = new Blob([doc.drawioXml ?? ''], { type: 'application/xml;charset=utf-8' });
+			filename = `${base}.drawio`;
+			label = '.drawio';
+		} else {
+			blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+			filename = `${base}.json`;
+			label = 'JSON';
+		}
+
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = `${m.title || 'mindflow'}.json`;
+		a.download = filename;
 		a.click();
 		URL.revokeObjectURL(url);
-		toast('已导出 JSON', 'success');
+		toast(`已导出 ${label}`, 'success');
 	}, []);
 
 	/**
-	 * Import a JSON file as a NEW map.
+	 * Import a file as a NEW document.
 	 *
-	 * Accepts MindFlow's own export and ProcessOn's export. The parsed document
-	 * is laid out fresh, so a file that carries no coordinates (ProcessOn) still
-	 * opens as a tidy map.
+	 * Supported inputs, decided by extension/content:
+	 *  - `.json`  → MindFlow's own format or a ProcessOn export (mind map)
+	 *  - `.md` / `.markdown` / `.txt` → Markdown note
+	 *  - `.drawio` / `.xml` → draw.io diagram
 	 */
 	const importFile = useCallback(
 		async (file: File) => {
@@ -197,14 +251,34 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 			setImporting(true);
 			try {
 				const text = await file.text();
-				const result = importDoc(text);
+				const name = file.name.replace(/\.(json|md|markdown|txt|drawio|xml)$/i, '');
+				const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
 
+				// --- draw.io: raw XML ---
+				if (ext === 'drawio' || (ext === 'xml' && text.includes('<mxfile'))) {
+					const doc: MapDoc = { kind: 'drawio', nodes: [], edges: [], drawioXml: text };
+					const created = await api.createMap((name || '导入的图表').slice(0, 80), serializeDoc(doc));
+					setMaps((prev) => [created.map, ...prev]);
+					toast('已导入 draw.io 图表', 'success');
+					return;
+				}
+
+				// --- markdown: plain text ---
+				if (ext === 'md' || ext === 'markdown' || ext === 'txt') {
+					const doc: MapDoc = { kind: 'md', nodes: [], edges: [], markdown: text };
+					const created = await api.createMap((name || '导入的文档').slice(0, 80), serializeDoc(doc));
+					setMaps((prev) => [created.map, ...prev]);
+					toast('已导入 Markdown 文档', 'success');
+					return;
+				}
+
+				// --- JSON: our format or ProcessOn ---
+				const result = importDoc(text);
 				if (!result.doc.nodes.length) {
 					toast('文件里没有节点', 'error');
 					return;
 				}
 
-				// title: the file's own title, else the filename
 				const parsedTitle = (() => {
 					try {
 						const raw = JSON.parse(text) as { title?: string };
@@ -213,15 +287,14 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 						return '';
 					}
 				})();
-				const fallback = file.name.replace(/\.json$/i, '');
-				const title = (parsedTitle || fallback || '导入的导图').slice(0, 80);
+				const title = (parsedTitle || name || '导入的导图').slice(0, 80);
 
 				const created = await api.createMap(title, serializeDoc(result.doc));
 				setMaps((prev) => [created.map, ...prev]);
 
-				const kind = result.format === 'processon' ? 'ProcessOn' : 'MindFlow';
+				const fmt = result.format === 'processon' ? 'ProcessOn' : 'MindFlow';
 				const extra = result.warnings.length ? `（${result.warnings[0]}）` : '';
-				toast(`已导入 ${result.doc.nodes.length} 个节点 · ${kind} 格式${extra}`, 'success');
+				toast(`已导入 ${result.doc.nodes.length} 个节点 · ${fmt} 格式${extra}`, 'success');
 			} catch (err) {
 				toast(err instanceof Error ? err.message : '导入失败', 'error');
 			} finally {
@@ -273,16 +346,54 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 			<main className="dash__main">
 				<div className="dash__head">
 					<h1>我的文件</h1>
-					<button className="btn-primary btn-new" onClick={createMap} disabled={creating}>
-						<Plus size={17} strokeWidth={2.2} />
-						新建
-					</button>
-					{/* Import: accepts MindFlow JSON and ProcessOn JSON. */}
+
+					{/* New: a split control so the user picks the document kind. */}
+					<div className="new-split">
+						<button className="btn-primary btn-new" onClick={() => void createMap('mind')} disabled={creating}>
+							<Plus size={17} strokeWidth={2.2} />
+							新建
+						</button>
+						<button
+							className="btn-primary new-split__caret"
+							onClick={() => setNewMenuOpen((v) => !v)}
+							disabled={creating}
+							title="选择新建类型"
+							aria-label="选择新建类型"
+						>
+							<ChevronDown size={15} strokeWidth={2.2} />
+						</button>
+						{newMenuOpen ? (
+							<div className="new-menu">
+								<button className="new-menu__item" onClick={() => void createMap('mind')}>
+									<Network size={15} strokeWidth={1.9} />
+									<span>
+										<b>思维导图</b>
+										<small>React Flow 画布</small>
+									</span>
+								</button>
+								<button className="new-menu__item" onClick={() => void createMap('md')}>
+									<FileText size={15} strokeWidth={1.9} />
+									<span>
+										<b>Markdown 文档</b>
+										<small>源码 + 实时预览</small>
+									</span>
+								</button>
+								<button className="new-menu__item" onClick={() => void createMap('drawio')}>
+									<PenLine size={15} strokeWidth={1.9} />
+									<span>
+										<b>draw.io 图表</b>
+										<small>嵌入官方编辑器</small>
+									</span>
+								</button>
+							</div>
+						) : null}
+					</div>
+
 					<button
 						className="btn-ghost btn-icon-text"
 						onClick={() => fileRef.current?.click()}
 						disabled={importing}
-						title="导入 JSON（支持 MindFlow 和 ProcessOn 格式）"
+						title="导入：MindFlow JSON / ProcessOn JSON / .md / .drawio"
 					>
 						<Upload size={15} strokeWidth={1.9} />
 						{importing ? '导入中…' : '导入'}
@@ -290,7 +401,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 					<input
 						ref={fileRef}
 						type="file"
-						accept=".json,application/json"
+						accept=".json,.md,.markdown,.txt,.drawio,.xml,application/json,text/markdown,application/xml"
 						hidden
 						onChange={(e) => {
 							const file = e.target.files?.[0];
@@ -335,7 +446,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 							<FolderOpen size={44} strokeWidth={1.3} />
 						</div>
 						<p>还没有导图，点击「新建」开始第一个。</p>
-						<button className="btn-primary btn-icon-text" onClick={createMap}>
+						<button className="btn-primary btn-icon-text" onClick={() => void createMap('mind')}>
 							<Plus size={16} strokeWidth={2.2} />
 							新建导图
 						</button>
