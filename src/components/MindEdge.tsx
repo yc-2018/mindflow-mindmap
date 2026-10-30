@@ -47,14 +47,22 @@ function pickPath(args: {
 	const dy = Math.abs(targetY - sourceY);
 
 	// Fishbone ribs: the connector leaves the spine horizontally but enters the
-	// rib's top/bottom edge, so a smooth step reads better than a bezier loop.
+	// rib's top/bottom edge. A smooth step is the natural shape, BUT its vertical
+	// segment lands on the same x for every sibling, so with several children the
+	// elbows overlap and cross each other. A bezier fans out from the single
+	// source point instead, which keeps sibling connectors nested.
 	const entersVertically =
 		sourceHandleId === HANDLE.sourceRight && Math.abs(targetY - sourceY) > Math.abs(targetX - sourceX) * 0.6;
 
 	if (entersVertically) {
-		const [path, labelX, labelY] = getSmoothStepPath({
-			...args,
-			borderRadius: 12,
+		const [path, labelX, labelY] = getBezierPath({
+			sourceX,
+			sourceY,
+			sourcePosition: args.sourcePosition,
+			targetX,
+			targetY,
+			targetPosition: args.targetPosition,
+			curvature: 0.42,
 		});
 		return { path, labelX, labelY };
 	}
