@@ -16,16 +16,27 @@
   - 同一邮箱 60 秒内只能请求一次；最多 5 次尝试
   - 注册成功直接签发会话，无需二次登录
 
+## 三种文档类型
+
+一张「地图」可以是三种东西之一，类型存在 `maps.data` 的 `kind` 字段；老文档没有该字段，按思维导图处理。
+
+| 类型 | 编辑器 | 存储字段 | 导入 | 导出 |
+|---|---|---|---|---|
+| `mind` | React Flow 画布 | `nodes` / `edges` / `structure` / `theme` | `.json`（MindFlow、ProcessOn） | `.json` |
+| `md` | 源码 + 实时预览 | `markdown` | `.md` / `.markdown` / `.txt` | `.md` |
+| `drawio` | 自托管 draw.io | `drawioXml` | `.drawio` / `.xml` | `.drawio` |
+
 ### 列表页
 
 - 缩略图网格，SVG 轻量渲染（不为每张卡片挂载 ReactFlow 实例）
-- 「新建」一键创建并进入编辑
-- 悬停缩略图浮现操作条：分享 / 下载 JSON / 重命名 / 删除
+  - 导图画 SVG、Markdown 显示文字摘要、draw.io 显示节点标签
+- 「新建」带下拉菜单，可选三种类型
+- 悬停缩略图浮现操作条：分享 / 下载 / 重命名 / 删除
 - 点击缩略图进入编辑
 - 搜索 + 排序（最近编辑 / 创建时间 / 标题）
-- **导入**：支持 MindFlow 自有 JSON 与 **ProcessOn 导出 JSON**
+- **导入**按扩展名分流：JSON（MindFlow / ProcessOn）、Markdown、draw.io
 
-### 编辑器
+### 思维导图编辑器
 
 - **7 种骨架结构**：思维导图、向右 / 向左树形图、向下 / 向上组织结构图、两侧平衡图、鱼骨图
 - **8 套主题**：经典、鲜艳、深海蓝、森林、玫瑰、暗色、单色、**彩虹分支**
@@ -41,6 +52,23 @@
 - **自由拖拽**：拖到节点上改结构，拖到空白处保留位置（标记 `pinned`，不参与自动布局）
 - 多选拖拽、框选（始终开启）
 - 分享链接（`/s/<token>`）只读公开访问，可随时关闭或**换一个链接**
+
+### Markdown 编辑器
+
+- 左侧源码、右侧实时预览，可隐藏预览
+- 与导图节点**共用同一个渲染器**，所以 `==高亮==`、表格、代码块行为完全一致
+- `Tab` 插入两空格，`Ctrl+S` 立即保存
+- 自动保存（防抖 900ms）
+
+### draw.io 编辑器
+
+嵌入自托管的官方 draw.io webapp（`/drawio/`），通过 postMessage 交换 XML：
+
+- `init` → 我们回 `load`（把文档里的 XML 交给编辑器）
+- `autosave` / `save` → 编辑器回传 XML，写入文档
+- `export` → 请求当前 XML，触发 `.drawio` 下载
+
+**为什么不直接用 `embed.diagrams.net`**：该服务对第三方 iframe 请求返回 **403 且无响应体**（反嵌入保护），换任何参数都绕不过。自托管官方 `draw.war` 发行版到自己的域名则没有这个限制，且仍是原版 UI。
 
 ### 分享页
 
@@ -58,6 +86,7 @@
 | 数据库 | Cloudflare D1（SQLite） |
 | 图床 | pixhost.to（经 Worker 代理，避免浏览器 CORS） |
 | 邮件 | Resend HTTP API（Worker 内 `fetch` 直调） |
+| 图表 | 自托管官方 draw.io webapp（`public/drawio/`） |
 | 鉴权 | PBKDF2-SHA256 密码哈希 + HMAC 签名 Cookie 会话 |
 
 ### 为什么用 Resend 而不是 SMTP
@@ -77,9 +106,16 @@ wrangler.jsonc           Worker 配置（D1 绑定、路由、环境变量）
 migrations/
   0001_init.sql          users / maps 表
   0002_verify.sql        注册验证码表
+public/drawio/           自托管的 draw.io webapp（585 文件 / 87.5MB）
 src/
   App.tsx                路由分发（/、/login、/register、/map/:id、/s/:token、/admin）
-  pages/                 登录、注册、仪表盘、编辑器、分享查看、用户管理
+  pages/
+    MapPage.tsx          地图页入口：先判断 kind 再挂载对应编辑器
+    Editor.tsx           思维导图编辑器（React Flow）
+    MarkdownEditor.tsx   Markdown 编辑器（源码 + 预览）
+    DrawioEditor.tsx     draw.io 编辑器（iframe + postMessage）
+    SharedView.tsx       分享页（三种类型各自的只读渲染）
+    Dashboard.tsx        列表页（新建菜单、导入导出、分享）
   components/            自定义节点、连线、缩略图、主题/骨架选择器、格式栏
   lib/
     layout.ts            布局算法（7 种骨架 + 增量布局 + 高度估算）
@@ -89,9 +125,19 @@ src/
     themes.ts            主题定义（含彩虹分支配色）
     structures.ts        骨架定义
     visibility.ts        折叠子树过滤
-    types.ts             节点/文档类型与序列化
+    types.ts             节点/文档类型与序列化（含 kind / markdown / drawioXml）
     api.ts               API 客户端
 ```
+
+### draw.io 资源的来源与更新
+
+`public/drawio/` 是官方 [jgraph/drawio](https://github.com/jgraph/drawio) 的 `draw.war` 发行版解包后，
+只保留编辑器运行必需的部分（`js` / `styles` / `mxgraph` / `stencils` / `shapes` / `plugins` / `math4` / `images`），
+去掉了 `img/`（约 2095 个模板预览图，编辑器不需要）。
+
+体积检查：585 文件、最大单文件 19.3 MB —— Cloudflare 免费版上限是 20,000 文件 / 单文件 25 MiB，均满足。
+
+升级 draw.io 时：下载新的 `draw.war` → 解压 → 覆盖 `public/drawio/` 里同名的目录 → 重新构建。
 
 ## 本地开发
 
@@ -158,7 +204,20 @@ maps         (id, owner_id, title, data, share_token, created_at, updated_at)
 verify_codes (id, email, code, attempts, created_at, expires_at, sent_at, used_at)
 ```
 
-`maps.data` 是 JSON 字符串：`{ nodes, edges, viewport, theme, structure }`，节点数据形如：
+`maps.data` 是 JSON 字符串，公共字段是 `kind`（缺省为 `mind`）。三种类型的完整形状：
+
+```json
+// 思维导图
+{ "kind": "mind", "nodes": [...], "edges": [...], "viewport": {...}, "theme": "classic", "structure": "balanced" }
+
+// Markdown 文档
+{ "kind": "md", "nodes": [], "edges": [], "markdown": "# 标题\n..." }
+
+// draw.io 图表
+{ "kind": "drawio", "nodes": [], "edges": [], "drawioXml": "<mxfile>...</mxfile>" }
+```
+
+思维导图的节点数据形如：
 
 ```json
 {
