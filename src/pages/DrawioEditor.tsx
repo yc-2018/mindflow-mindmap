@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronLeft, Download, PenLine } from 'lucide-react';
+import { ChevronLeft, Download, PanelLeft, PanelRight, PenLine } from 'lucide-react';
 
 import { navigate } from '../lib/router';
 import { toast } from '../lib/toast';
@@ -38,10 +38,72 @@ interface Props {
  * language is requested explicitly, and the translations live in
  * `resources/dia_<lang>.txt` — those files have to be served alongside the
  * webapp, otherwise the UI stays English no matter what `lang` says.
+ *
+ * UI note: `ui=min`, and the SIDEBAR TOGGLES LIVE IN OUR OWN TOOLBAR.
+ *
+ * Two separate problems make draw.io's own sidebar handling unreliable here:
+ *
+ *  1. In `ui=min` the 「形状」/「格式」buttons only CLOSE their panel. Clicking
+ *     them again does nothing, so a dismissed sidebar could never be reopened —
+ *     the reported "两边的侧边栏怎么关闭掉就打不开了".
+ *
+ *  2. draw.io decides the initial shapes-panel width with
+ *     `hsplitPosition = screen.width <= Editor.smallScreenWidth ? 0 : default`.
+ *     On a small viewport that is 0, i.e. the panel starts closed, and the
+ *     width is then left at 1px forever.
+ *
+ * The normal skins (`ui=simple`, `ui=sketch`) do render a real menu bar, but in
+ * embed mode they also collapse the shapes panel, so the panels vanish instead
+ * of becoming toggleable.
+ *
+ * We therefore keep `ui=min` and drive the panels ourselves. The iframe is
+ * served from OUR origin (`/drawio/`), so the parent page can read and write
+ * its DOM directly — no cross-origin barrier. A `forced` width is applied to
+ * the panel containers and `refresh()` is poked so draw.io relayouts.
  */
 const DRAWIO_BASE = '/drawio/';
 
 const EMBED_URL = `${DRAWIO_BASE}?embed=1&ui=min&spin=1&proto=json&noSaveBtn=1&noExitBtn=1&libraries=1&lang=zh`;
+
+/**
+ * Force the shapes panel (left) and format panel (right) to a given width.
+ *
+ * Returns true when the frame was reachable. draw.io positions the panels from
+ * `hsplitPosition` / `formatWidth`, but those live on an `EditorUi` instance we
+ * cannot reliably locate (it is not exposed as `App.main`). Setting the CSS
+ * width directly is both simpler and immune to that: the panel containers are
+ * plain elements in the frame's DOM, and because the frame shares our origin we
+ * are allowed to touch them.
+ */
+function setPanels(iframe: HTMLIFrameElement | null, opts: { left: boolean; right: boolean }): boolean {
+	const win = iframe?.contentWindow;
+	const doc = iframe?.contentDocument;
+	if (!win || !doc) return false;
+
+	const left = doc.querySelector<HTMLElement>('.geSidebarContainer');
+	const right = doc.querySelector<HTMLElement>('.geFormatContainer');
+	if (!left && !right) return false;
+
+	// the left panel is 232px by default; the right one is 240px
+	if (left) {
+		left.style.display = opts.left ? '' : 'none';
+		if (opts.left) left.style.width = '232px';
+	}
+	if (right) {
+		right.style.display = opts.right ? '' : 'none';
+		if (opts.right) right.style.width = '240px';
+	}
+
+	// let draw.io recompute its layout with the new widths
+	try {
+		const w = win as unknown as Record<string, unknown>;
+		const app = w.App as { main?: { refresh?: () => void } } | undefined;
+		app?.main?.refresh?.();
+	} catch {
+		/* layout refresh is best-effort */
+	}
+	return true;
+}
 
 export default function DrawioEditor({
 	title,
@@ -53,9 +115,19 @@ export default function DrawioEditor({
 }: Props) {
 	const frameRef = useRef<HTMLIFrameElement | null>(null);
 	const [ready, setReady] = useState(false);
+	/**
+	 * Panel visibility, owned by US rather than by draw.io.
+	 *
+	 * Both default to open, and every toggle re-applies the state to the frame
+	 * so the panels cannot get stuck closed.
+	 */
+	const [showLeft, setShowLeft] = useState(true);
+	const [showRight, setShowRight] = useState(true);
 	// the latest XML, so the message handler always sees the current value
 	const latestXml = useRef(xml);
 	latestXml.current = xml;
+
+
 
 	/** Post a message to the iframe once it exists. */
 	const post = useCallback((msg: Record<string, unknown>) => {
@@ -78,6 +150,14 @@ export default function DrawioEditor({
 					setReady(true);
 					// hand the stored diagram to the editor
 					post({ action: 'load', xml: latestXml.current, autosave: 1 });
+					/**
+					 * draw.io may start with the shapes panel collapsed (its
+					 * `hsplitPosition` is 0 on small screens). Apply our own state
+					 * once the UI exists, and again shortly after, because the
+					 * layout settles asynchronously after `load`.
+					 */
+					window.setTimeout(() => setPanels(frameRef.current, { left: true, right: true }), 400);
+					window.setTimeout(() => setPanels(frameRef.current, { left: true, right: true }), 1600);
 					break;
 				case 'save':
 				case 'autosave': {
@@ -132,6 +212,31 @@ export default function DrawioEditor({
 					<span className="save-state">{ready ? '已连接 draw.io' : '加载中…'}</span>
 				</div>
 				<div className="editor__right">
+					{/* panel toggles: our own, so a closed panel is always reopenable */}
+					<button
+						className={`btn-ghost btn-icon-text${showLeft ? ' is-on' : ''}`}
+						onClick={() => {
+							const next = !showLeft;
+							setShowLeft(next);
+							setPanels(frameRef.current, { left: next, right: showRight });
+						}}
+						title={showLeft ? '隐藏左侧形状库' : '显示左侧形状库'}
+					>
+						<PanelLeft size={15} strokeWidth={1.9} />
+						形状库
+					</button>
+					<button
+						className={`btn-ghost btn-icon-text${showRight ? ' is-on' : ''}`}
+						onClick={() => {
+							const next = !showRight;
+							setShowRight(next);
+							setPanels(frameRef.current, { left: showLeft, right: next });
+						}}
+						title={showRight ? '隐藏右侧格式面板' : '显示右侧格式面板'}
+					>
+						<PanelRight size={15} strokeWidth={1.9} />
+						格式面板
+					</button>
 					<button
 						className="btn-ghost btn-icon-text"
 						onClick={() => post({ action: 'export', format: 'xml' })}
