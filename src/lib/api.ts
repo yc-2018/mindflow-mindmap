@@ -93,6 +93,12 @@ export const api = {
 			method: 'POST',
 			body: JSON.stringify({ enabled }),
 		}),
+	/** Rotate the share token, invalidating every previously shared link. */
+	resetShare: (id: string) =>
+		req<{ shareToken: string | null }>(`/api/maps/${id}/share`, {
+			method: 'POST',
+			body: JSON.stringify({ reset: true }),
+		}),
 	getShared: (token: string) => req<{ map: MapDetail }>(`/api/share/${token}`),
 
 	listUsers: () => req<{ users: AdminUser[] }>('/api/admin/users'),

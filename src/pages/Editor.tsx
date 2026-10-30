@@ -31,6 +31,7 @@ import {
 	Minimize2,
 	Plus,
 	Redo2,
+	RefreshCw,
 	Share2,
 	Trash2,
 	TriangleAlert,
@@ -770,6 +771,30 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 		[mapId, shareBusy],
 	);
 
+	/**
+	 * Issue a NEW share token.
+	 *
+	 * A share link is a bearer token: once it has been forwarded there is no way
+	 * to revoke it short of rotating. The old link stops working immediately.
+	 */
+	const resetShareLink = useCallback(async () => {
+		if (shareBusy) return;
+		setShareBusy(true);
+		try {
+			const { shareToken: token } = await api.resetShare(mapId);
+			setShareToken(token);
+			if (token) {
+				const url = `${window.location.origin}/s/${token}`;
+				await navigator.clipboard.writeText(url).catch(() => undefined);
+				toast('已生成新链接，旧链接已失效', 'success');
+			}
+		} catch {
+			toast('操作失败', 'error');
+		} finally {
+			setShareBusy(false);
+		}
+	}, [mapId, shareBusy]);
+
 	/** Copy the current link again (the panel's "复制链接" button). */
 	const copyShareLink = useCallback(async () => {
 		if (!shareToken) return;
@@ -1477,6 +1502,13 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 						proOptions={{ hideAttribution: true }}
 						nodesDraggable={!readOnly}
 						nodesConnectable={false}
+						/**
+						 * React Flow makes each node wrapper focusable by default, and it
+						 * grabs focus right after our edit-mode effect runs — which stole the
+						 * caret from the textarea when a node was created with Tab/Enter.
+						 * Turning that off lets the textarea keep focus.
+						 */
+						nodesFocusable={false}
 						elementsSelectable
 						/* Box-select is always on, like ProcessOn: dragging on empty
 						   canvas draws a selection rectangle. Pan with the middle/right
@@ -1602,11 +1634,20 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 									</div>
 									<div className="modal__actions">
 										<button
+											className="btn-ghost btn-icon-text"
+											onClick={() => void resetShareLink()}
+											disabled={shareBusy}
+											title="生成新链接，旧链接立即失效"
+										>
+											<RefreshCw size={15} strokeWidth={1.9} />
+											{shareBusy ? '处理中…' : '换一个链接'}
+										</button>
+										<button
 											className="btn-ghost danger"
 											onClick={() => void toggleShare(false)}
 											disabled={shareBusy}
 										>
-											{shareBusy ? '处理中…' : '关闭分享'}
+											关闭分享
 										</button>
 										<button className="btn-ghost" onClick={() => setShareOpen(false)}>
 											完成

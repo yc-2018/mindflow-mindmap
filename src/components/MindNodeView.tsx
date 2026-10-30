@@ -52,20 +52,45 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 	const { updateNodeData } = useReactFlow();
 	const theme = useTheme();
 
-	// reset the draft whenever this node enters edit mode
+	/**
+	 * Focus the textarea when this node enters edit mode.
+	 *
+	 * Two things fight us here:
+	 *  1. a BRAND-NEW node mounts a frame or two after the state update, so the
+	 *     textarea may not exist yet on the first attempt
+	 *  2. React Flow focuses the NODE WRAPPER (a div) after our handler runs,
+	 *     which steals the caret back
+	 *
+	 * So we retry across frames AND re-assert focus each time, stopping only once
+	 * the textarea really is the active element.
+	 */
 	useEffect(() => {
-		if (editing) {
-			setDraft(data.label);
-			setFormat(null);
-			requestAnimationFrame(() => {
-				const el = inputRef.current;
-				if (!el) return;
+		if (!editing) return;
+
+		setDraft(data.label);
+		setFormat(null);
+
+		let frames = 0;
+		let raf = 0;
+
+		const focusWhenReady = () => {
+			const el = inputRef.current;
+			if (el) {
 				el.focus();
 				el.select();
 				el.style.height = 'auto';
 				el.style.height = `${el.scrollHeight}px`;
-			});
-		}
+
+				// React Flow may grab focus back on the next tick; verify and retry
+				if (document.activeElement === el) return;
+				if (frames++ < 12) raf = requestAnimationFrame(focusWhenReady);
+				return;
+			}
+			if (frames++ < 12) raf = requestAnimationFrame(focusWhenReady);
+		};
+
+		raf = requestAnimationFrame(focusWhenReady);
+		return () => cancelAnimationFrame(raf);
 	}, [editing, data.label]);
 
 	/**
@@ -179,6 +204,10 @@ function MindNodeView({ id, data, selected }: NodeProps<MindNode>) {
 						className="mind-node__input nodrag nopan"
 						value={draft}
 						rows={1}
+						// React Flow focuses the node wrapper on mousedown; stopping the
+						// event here keeps the caret inside the textarea while editing.
+						onMouseDown={(e) => e.stopPropagation()}
+						onPointerDown={(e) => e.stopPropagation()}
 						onChange={(e) => {
 							setDraft(e.target.value);
 							e.target.style.height = 'auto';

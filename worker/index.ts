@@ -531,14 +531,34 @@ async function deleteMap(env: Env, user: SessionUser, id: string): Promise<Respo
 	return json({ ok: true });
 }
 
-async function shareMap(env: Env, user: SessionUser, id: string, enable: boolean): Promise<Response> {
+/**
+ * Turn sharing on/off, or rotate the token.
+ *
+ * `mode`:
+ *  - 'on'    enable sharing (keeps the existing token if there is one)
+ *  - 'off'   disable sharing (clears the token)
+ *  - 'reset' rotate to a NEW token, invalidating every previously shared link
+ *
+ * Rotation exists because a share link is a bearer token: once it leaks there is
+ * no way to take it back other than issuing a fresh one.
+ */
+async function shareMap(
+	env: Env,
+	user: SessionUser,
+	id: string,
+	mode: 'on' | 'off' | 'reset',
+): Promise<Response> {
 	const row = await env.DB.prepare('SELECT owner_id, share_token FROM maps WHERE id = ?')
 		.bind(id)
 		.first<{ owner_id: string; share_token: string | null }>();
 	if (!row) return fail('导图不存在', 404);
 	if (row.owner_id !== user.id && user.role !== 'admin') return fail('无权访问', 403);
 
-	const token = enable ? row.share_token || randomId(12) : null;
+	let token: string | null;
+	if (mode === 'off') token = null;
+	else if (mode === 'reset') token = randomId(12);
+	else token = row.share_token || randomId(12);
+
 	await env.DB.prepare('UPDATE maps SET share_token = ?, updated_at = ? WHERE id = ?')
 		.bind(token, Date.now(), id)
 		.run();
@@ -709,8 +729,10 @@ async function route(request: Request, env: Env): Promise<Response> {
 
 	const shareMatch = path.match(/^\/api\/maps\/([A-Za-z0-9]+)\/share$/);
 	if (shareMatch && method === 'POST') {
-		const body = (await request.json().catch(() => ({}))) as { enabled?: boolean };
-		return shareMap(env, user, shareMatch[1], body.enabled !== false);
+		const body = (await request.json().catch(() => ({}))) as { enabled?: boolean; reset?: boolean };
+		// `reset: true` rotates the token; otherwise honour `enabled`
+		const mode: 'on' | 'off' | 'reset' = body.reset ? 'reset' : body.enabled === false ? 'off' : 'on';
+		return shareMap(env, user, shareMatch[1], mode);
 	}
 
 	if (path === '/api/upload' && method === 'POST') return handleUpload(request);

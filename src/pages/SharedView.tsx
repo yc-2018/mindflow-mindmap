@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
 	Background,
 	BackgroundVariant,
@@ -7,7 +7,7 @@ import {
 	ReactFlowProvider,
 	type Edge,
 } from '@xyflow/react';
-import { House, Link2Off } from 'lucide-react';
+import { House, LayoutGrid, Link2Off } from 'lucide-react';
 import '@xyflow/react/dist/style.css';
 
 import MindNodeView, { TOGGLE_COLLAPSE_EVENT } from '../components/MindNodeView';
@@ -25,6 +25,12 @@ import { getTheme } from '../lib/themes';
 const nodeTypes = { mind: MindNodeView };
 const edgeTypes = { mind: MindEdge };
 
+/** Recount each node's direct children, so collapse badges stay accurate. */
+function syncChildCounts(nodes: MindNode[], edges: Edge[]): MindNode[] {
+	const counts = childCounts(nodes, edges);
+	return nodes.map((n) => ({ ...n, data: { ...n.data, childCount: counts.get(n.id) ?? 0 } }));
+}
+
 function SharedInner({ token }: { token: string }) {
 	const [title, setTitle] = useState('');
 	const [nodes, setNodes] = useState<MindNode[]>([]);
@@ -34,25 +40,48 @@ function SharedInner({ token }: { token: string }) {
 	const [state, setState] = useState<'loading' | 'ok' | 'missing'>('loading');
 
 	/**
+	 * Latest values for the collapse handler.
+	 *
+	 * The toggle listener is registered once (it must survive re-renders), so it
+	 * cannot read the current edges/structure from a closure — it would capture
+	 * the values from the first render.
+	 */
+	const latestEdges = useRef<Edge[]>([]);
+	const latestStructure = useRef<StructureId>('balanced');
+
+	/**
 	 * Let viewers collapse/expand branches.
 	 *
 	 * That is the only interaction a read-only page offers: it changes what is
 	 * visible, not the document. Everything else (editing, deleting, dragging) is
 	 * suppressed by the readOnly context.
+	 *
+	 * The layout is re-run after every toggle. Expanding a branch that was
+	 * collapsed when the map was saved makes the hidden nodes reappear at their
+	 * stored coordinates, which can overlap the nodes that were laid out around
+	 * the collapsed node — the "展开后重叠" report. Re-flowing locally (never
+	 * persisted) keeps the view tidy.
 	 */
+	const relayoutLocal = useCallback(
+		(ns: MindNode[], eds: Edge[], struct: StructureId) =>
+			layoutTree(syncChildCounts(ns, eds), eds, struct, { keepPinned: false }),
+		[],
+	);
+
 	useEffect(() => {
 		const onToggle = (e: Event) => {
 			const detail = (e as CustomEvent<{ id: string }>).detail;
 			if (!detail?.id) return;
-			setNodes((nds) =>
-				nds.map((n) =>
+			setNodes((nds) => {
+				const next = nds.map((n) =>
 					n.id === detail.id ? { ...n, data: { ...n.data, collapsed: !n.data.collapsed } } : n,
-				),
-			);
+				);
+				return relayoutLocal(next, latestEdges.current, latestStructure.current);
+			});
 		};
 		window.addEventListener(TOGGLE_COLLAPSE_EVENT, onToggle);
 		return () => window.removeEventListener(TOGGLE_COLLAPSE_EVENT, onToggle);
-	}, []);
+	}, [relayoutLocal]);
 
 	useEffect(() => {
 		api
@@ -91,6 +120,8 @@ function SharedInner({ token }: { token: string }) {
 				setEdges(withAdaptiveHandles(laidOut, pruned, struct));
 				setStructure(struct);
 				setThemeId(doc.theme || 'classic');
+				latestEdges.current = withAdaptiveHandles(laidOut, pruned, struct);
+				latestStructure.current = struct;
 				setState('ok');
 			})
 			.catch(() => setState('missing'));
@@ -126,6 +157,17 @@ function SharedInner({ token }: { token: string }) {
 	const visible = visibleGraph(nodes, edges);
 	const shownEdges = withAdaptiveHandles(visible.nodes, visible.edges, structure);
 
+	/**
+	 * "整理布局" for viewers.
+	 *
+	 * Re-flows the map locally so expanding a branch never leaves overlapping
+	 * nodes. Purely a view operation: nothing is written back, and a reload
+	 * restores the owner's arrangement.
+	 */
+	const tidyLocally = () => {
+		setNodes((nds) => relayoutLocal(nds, latestEdges.current, latestStructure.current));
+	};
+
 	return (
 		<div className="editor">
 			<header className="editor__bar">
@@ -134,6 +176,14 @@ function SharedInner({ token }: { token: string }) {
 					<span className="save-state">只读分享</span>
 				</div>
 				<div className="editor__right">
+					<button
+						className="btn-ghost btn-icon-text"
+						onClick={tidyLocally}
+						title="重新排列节点（只影响当前浏览，不会修改原图）"
+					>
+						<LayoutGrid size={15} strokeWidth={1.9} />
+						整理布局
+					</button>
 					<button className="btn-ghost btn-icon-text" onClick={() => navigate('/')}>
 						<House size={15} strokeWidth={1.9} />
 						返回首页
