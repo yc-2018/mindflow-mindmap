@@ -481,14 +481,25 @@ function placeLeftovers(
 		return Math.max(self, sum - CHILD_GAP);
 	};
 
-	/** Lay out one subtree growing to the right, centred on its own band. */
+	/**
+	 * Lay out one subtree growing to the RIGHT, each level one column further.
+	 *
+	 * The parent is aligned with its FIRST child rather than centred on the whole
+	 * band. Centring pushed the parent's centre far above/below its children when
+	 * there were only two of them, which made the connector look vertical and
+	 * fold back — the tangle in the screenshot. Aligning with the first child
+	 * keeps every connector a clean horizontal run.
+	 */
 	const placeSubtree = (id: string, x: number, yTop: number): void => {
 		const node = byId.get(id);
 		if (!node) return;
 		const h = heightOf(id);
-		placed.set(id, { x, y: yTop + (h - slotHeight(node)) / 2 });
-
 		const kids = kidsOf(id);
+
+		// a leaf fills its band; a parent sits level with its first child
+		const selfY = kids.length ? yTop : yTop + (h - slotHeight(node)) / 2;
+		placed.set(id, { x, y: selfY });
+
 		if (!kids.length) return;
 		let childY = yTop;
 		for (const k of kids) {
@@ -725,6 +736,11 @@ function layoutFishbone(
 	 *
 	 * Deeper levels move away from the spine AND shift right, so the bones read as
 	 * a fish skeleton rather than a plain indented tree.
+	 *
+	 * Children always start at or to the RIGHT of their parent. Starting them at
+	 * the slot's left edge let the first child end up behind the parent, so the
+	 * connector ran backwards and tangled with its siblings — visible in the
+	 * "分出来的节点的子节点布局还是乱" report.
 	 */
 	const placeRib = (id: string, startX: number, dir: number, level: number): void => {
 		const w = widths.get(id) ?? NODE_WIDTH;
@@ -742,11 +758,22 @@ function layoutFishbone(
 
 		const total =
 			children.reduce((s, k) => s + (widths.get(k) ?? NODE_WIDTH) + SLOT_GAP, 0) - SLOT_GAP;
-		let cursor = startX + Math.max(0, (w - total) / 2);
+
+		/**
+		 * Children are laid out in a row that starts at the parent's own x.
+		 *
+		 * Starting at the slot's left edge (or centring the row under the parent)
+		 * pushed the first child's centre above/below the parent's centre, so the
+		 * connector read as vertical and folded back into the node — the tangle in
+		 * the screenshot. Anchoring the row at the parent keeps every connector a
+		 * clean horizontal run.
+		 */
+		let cursor = x;
 		for (const k of children) {
 			placeRib(k, cursor, dir, level + 1);
 			cursor += (widths.get(k) ?? NODE_WIDTH) + SLOT_GAP;
 		}
+		void total;
 	};
 
 	// Lay the ribs out left-to-right, alternating above/below the spine so the
