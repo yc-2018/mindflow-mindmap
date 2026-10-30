@@ -10,6 +10,7 @@ import {
 	Network,
 	Pencil,
 	Plus,
+	RefreshCw,
 	Search,
 	Share2,
 	Trash2,
@@ -130,6 +131,29 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 			setMaps((prev) => prev.map((x) => (x.id === m.id ? { ...x, shareToken: null } : x)));
 			setShareFor(null);
 			toast('已关闭分享', 'success');
+		} catch {
+			toast('操作失败', 'error');
+		}
+	}, []);
+
+	/**
+	 * Rotate the share link.
+	 *
+	 * Same operation the editor offers: a share URL is a bearer token, so the only
+	 * way to revoke a leaked one is to issue a fresh token. The old link dies
+	 * immediately.
+	 */
+	const resetShare = useCallback(async (m: MapSummary) => {
+		try {
+			const { shareToken } = await api.resetShare(m.id);
+			const updated = { ...m, shareToken };
+			setMaps((prev) => prev.map((x) => (x.id === m.id ? updated : x)));
+			setShareFor(updated);
+			if (shareToken) {
+				const url = `${window.location.origin}/s/${shareToken}`;
+				await navigator.clipboard.writeText(url).catch(() => undefined);
+				toast('已生成新链接，旧链接已失效', 'success');
+			}
 		} catch {
 			toast('操作失败', 'error');
 		}
@@ -430,6 +454,14 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 							</button>
 						</div>
 						<div className="modal__actions">
+							<button
+								className="btn-ghost btn-icon-text"
+								onClick={() => void resetShare(shareFor)}
+								title="生成新链接，旧链接立即失效"
+							>
+								<RefreshCw size={15} strokeWidth={1.9} />
+								换一个链接
+							</button>
 							<button className="btn-ghost danger" onClick={() => void closeShare(shareFor)}>
 								关闭分享
 							</button>
