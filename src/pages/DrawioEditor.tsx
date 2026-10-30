@@ -33,10 +33,15 @@ interface Props {
  * `/drawio/index.html` — Cloudflare's asset layer answers the explicit `.html`
  * path with a 307 to the directory form, and following that inside an iframe
  * costs an extra round trip.
+ *
+ * Language note: `lang=zh` is required. draw.io falls back to English unless a
+ * language is requested explicitly, and the translations live in
+ * `resources/dia_<lang>.txt` — those files have to be served alongside the
+ * webapp, otherwise the UI stays English no matter what `lang` says.
  */
 const DRAWIO_BASE = '/drawio/';
 
-const EMBED_URL = `${DRAWIO_BASE}?embed=1&ui=min&spin=1&proto=json&noSaveBtn=1&noExitBtn=1&libraries=1`;
+const EMBED_URL = `${DRAWIO_BASE}?embed=1&ui=min&spin=1&proto=json&noSaveBtn=1&noExitBtn=1&libraries=1&lang=zh`;
 
 export default function DrawioEditor({
 	title,

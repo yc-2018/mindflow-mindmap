@@ -233,7 +233,7 @@ function SharedInner({ token }: { token: string }) {
 					<iframe
 						className="drawio-editor__frame"
 						title="draw.io viewer"
-						src={`/drawio/?lightbox=1&highlight=0000ff&edit=_blank&nav=1&title=${encodeURIComponent(title)}#R${encodeURIComponent(drawioXml)}`}
+						src={`/drawio/?lightbox=1&lang=zh&highlight=0000ff&edit=_blank&nav=1&title=${encodeURIComponent(title)}#R${encodeURIComponent(drawioXml)}`}
 					/>
 				</div>
 			</div>

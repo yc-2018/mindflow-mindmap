@@ -1,5 +1,6 @@
 import { memo, useMemo } from 'react';
 import { parseDoc, docKind, type MindNode } from '../lib/types';
+import MarkdownRenderer from './MarkdownRenderer';
 import { estimateHeight, NODE_WIDTH, pruneEdges, layoutTree, syncTones } from '../lib/layout';
 import { getStructure } from '../lib/structures';
 
@@ -23,32 +24,62 @@ function Thumbnail({ data }: Props) {
 	const kind = useMemo(() => docKind(parseDoc(data)), [data]);
 
 	/**
-	 * Markdown documents get a text preview: the first few non-empty lines,
-	 * stripped of markdown markers. That reads far better on a card than an
-	 * "empty map" placeholder.
+	 * Markdown documents preview with the REAL renderer, not stripped text.
+	 *
+	 * The old version removed every marker with a regex, which also removed the
+	 * `==highlight==` markers — so the card showed flat text and lost the very
+	 * thing that makes the document readable at a glance. Rendering the first
+	 * chunk through `MarkdownRenderer` keeps highlights, bold and headings.
+	 *
+	 * The excerpt stops at the first horizontal rule or after ~12 lines so a long
+	 * note does not overflow the card.
 	 */
 	const mdPreview = useMemo(() => {
 		if (kind !== 'md') return null;
 		const doc = parseDoc(data);
-		const lines = (doc.markdown ?? '')
-			.split('\n')
-			.map((l) => l.replace(/^[#>\-*\d.\s]+/, '').replace(/[*_`~]/g, '').trim())
-			.filter(Boolean)
-			.slice(0, 7);
-		return lines;
+		const src = (doc.markdown ?? '').trim();
+		if (!src) return '';
+		const lines = src.split('\n');
+		const cut: string[] = [];
+		for (const line of lines) {
+			cut.push(line);
+			if (cut.length >= 12) break;
+		}
+		return cut.join('\n');
 	}, [data, kind]);
 
-	/** draw.io diagrams show the node labels found in their XML. */
+	/**
+	 * draw.io diagrams preview with their real shape labels.
+	 *
+	 * The regex used to read `value="..."` from the raw XML and display it
+	 * verbatim — but a self-closing/edge cell can carry an XML-escaped payload,
+	 * and the card ended up looking like a dump of markup. Decoding entities and
+	 * dropping empty/edge cells fixes that; only vertex labels are shown.
+	 */
 	const drawioPreview = useMemo(() => {
 		if (kind !== 'drawio') return null;
 		const doc = parseDoc(data);
 		const xml = doc.drawioXml ?? '';
+
+		const decode = (s: string) =>
+			s
+				.replace(/&lt;/g, '<')
+				.replace(/&gt;/g, '>')
+				.replace(/&quot;/g, '"')
+				.replace(/&#39;/g, "'")
+				.replace(/&amp;/g, '&');
+
 		const labels: string[] = [];
-		const re = /<mxCell[^>]*\bvalue="([^"]+)"/g;
+		// only cells that are VERTICES (shapes), never edges
+		const re = /<mxCell[^>]*\bvertex="1"[^>]*\bvalue="([^"]*)"|<mxCell[^>]*\bvalue="([^"]*)"[^>]*\bvertex="1"/g;
 		let m: RegExpExecArray | null;
 		while ((m = re.exec(xml)) && labels.length < 6) {
-			const v = m[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
-			if (v) labels.push(v);
+			const raw = m[1] ?? m[2] ?? '';
+			const v = decode(raw)
+				.replace(/<[^>]+>/g, ' ')
+				.replace(/\s+/g, ' ')
+				.trim();
+			if (v && !v.startsWith('<')) labels.push(v);
 		}
 		return labels;
 	}, [data, kind]);
@@ -108,13 +139,10 @@ function Thumbnail({ data }: Props) {
 
 	if (kind === 'md') {
 		return (
-			<div className="thumb thumb--text">
-				{(mdPreview ?? []).map((line, i) => (
-					<span key={i} className={`thumb__line${i === 0 ? ' thumb__line--head' : ''}`}>
-						{line}
-					</span>
-				))}
-				{(mdPreview ?? []).length === 0 ? <span className="thumb__empty-note">空白文档</span> : null}
+			<div className="thumb thumb--md">
+				<div className="thumb__md-render md-label">
+					<MarkdownRenderer source={mdPreview || '*空白文档*'} />
+				</div>
 			</div>
 		);
 	}
