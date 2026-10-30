@@ -79,31 +79,28 @@ export function withAdaptiveHandles(
 			/**
 			 * Fishbone connectors.
 			 *
-			 * A rib hangs off the horizontal spine, so a rib that sits clearly ABOVE
-			 * or BELOW its parent is entered through its top/bottom edge — that is
-			 * what makes the skeleton read correctly.
+			 * A rib hangs off the spine, so the head→rib line is horizontal and the
+			 * rib→child line is vertical. Which handle a rib's children use depends
+			 * on whether they sit above or below it.
 			 *
-			 * A detached subtree, however, is laid out as a small mind map growing
-			 * to the RIGHT. Forcing a vertical entry there made the connector run
-			 * sideways then fold back vertically, crossing its siblings — the
-			 * "鱼骨图子节点布局还是乱" report.
-			 *
-			 * So the test is a RATIO rather than a bare comparison: only treat it as
-			 * a rib when the vertical offset clearly dominates (1.5x). A child that
-			 * is merely slightly above/below but mostly beside gets the plain
-			 * horizontal connector.
+			 * The test is deliberately NOT a ratio: a rib's children are directly
+			 * above/below it with only one column of horizontal offset, so the
+			 * vertical component is small in absolute terms but still the dominant
+			 * direction. Comparing |dy| against |dx| is enough — a ratio threshold
+			 * mis-classified them as horizontal, which made React Flow draw arcs
+			 * that crossed the neighbouring ribs (28 crossings on a real map).
 			 */
 			const sc = { x: s.position.x + NODE_W / 2, y: s.position.y };
 			const tc = { x: t.position.x + NODE_W / 2, y: t.position.y };
 			const dx = Math.abs(tc.x - sc.x);
 			const dy = tc.y - sc.y;
 
-			if (Math.abs(dy) > dx * 1.5) {
-				// genuinely a rib: leave right, enter from the facing top/bottom edge
+			if (Math.abs(dy) >= dx) {
+				// the child is above/below the parent: enter from its facing edge
 				sourceHandle = HANDLE.sourceRight;
 				targetHandle = dy < 0 ? HANDLE.targetBottom : HANDLE.targetTop;
 			} else {
-				// side-by-side (a detached subtree): plain horizontal connector
+				// side-by-side: plain horizontal connector
 				sourceHandle = tc.x >= sc.x ? HANDLE.sourceRight : HANDLE.sourceLeft;
 				targetHandle = tc.x >= sc.x ? HANDLE.targetLeft : HANDLE.targetRight;
 			}

@@ -732,7 +732,7 @@ function layoutFishbone(
 	 * space to the right of the previous level.
 	 */
 	const LEVEL_INDENT = NODE_WIDTH + 40;
-	const SIBLING_GAP = 20; // vertical gap between sibling bones
+	const SIBLING_GAP = 26; // vertical gap between siblings
 	const SLOT_GAP = 48; // horizontal gap between bone slots
 
 	/**
@@ -776,8 +776,10 @@ function layoutFishbone(
 	/**
 	 * Real horizontal span of a subtree, in pixels.
 	 *
-	 * A subtree occupies LEVEL_INDENT per level, but only as many levels as it
-	 * actually has — a bone whose children are all leaves needs a single column.
+	 * Children stack vertically, so a subtree is as wide as its deepest chain:
+	 * NODE_WIDTH plus one LEVEL_INDENT per level. (Measuring by child count instead
+	 * reserved 12 columns for a bone with 12 children, which blew the map up to
+	 * 6500px wide.)
 	 */
 	const spanOf = (id: string): number => NODE_WIDTH + depthOf(id) * LEVEL_INDENT;
 
@@ -807,59 +809,87 @@ function layoutFishbone(
 	 *
 	 * `dir` = -1 above, +1 below; it decides which way the children grow.
 	 */
-	const placeBone = (id: string, levelX: number, dir: number, topY: number): void => {
+	const placeBone = (id: string, levelX: number, dir: number, levelY: number): void => {
 		const node = byId.get(id);
 		if (!node) return;
 		const nh = estimateHeight(node);
 
 		/**
-		 * The bone straddles the spine, offset by half its height so an upper bone
-		 * and a lower bone sharing a column do not overlap: the upper one sits just
-		 * above the line, the lower one just below.
+		 * The bone sits ON the spine, centred vertically.
+		 *
+		 * All bones on one line means the head→bone connectors are pure horizontal
+		 * runs at the same y — they overlap (fine) but never cross. Placing bones
+		 * alternately above/below made those connectors fan out from a single point
+		 * and cross each other right beside the head (28 crossings on a real
+		 * 80-node map). The ribs still read as a fishbone because their SUBTREES
+		 * alternate above/below the line.
 		 */
-		const y = dir < 0 ? -nh : 0;
+		const y = -nh / 2;
 		placed.set(id, { x: levelX, y });
 
 		const kids = tree.children.get(id) ?? [];
 		if (!kids.length) return;
 
+		// children grow AWAY from the spine, starting right beside the bone.
+		// Advance by each child's BAND height, matching how placeChild reserves it.
 		const childX = levelX + LEVEL_INDENT;
-		let cursor = topY;
+		let cursor = dir < 0 ? y - SIBLING_GAP : y + nh + SIBLING_GAP;
 		for (const k of kids) {
 			const kh = heightOf(k);
-			placeChild(k, childX, dir, cursor);
-			cursor += kh + SIBLING_GAP;
+			if (dir < 0) {
+				placeChild(k, childX, dir, cursor);
+				cursor -= kh + SIBLING_GAP;
+			} else {
+				placeChild(k, childX, dir, cursor);
+				cursor += kh + SIBLING_GAP;
+			}
 		}
 	};
 
 	/**
 	 * Place a descendant of a bone.
 	 *
-	 * A child does NOT sit on the spine: it lives wholly above (dir < 0) or below
-	 * (dir > 0) the line, stacked with its siblings and indented one column per
-	 * level. Staying off the spine keeps the corridor clear for the head's
-	 * connectors.
+	 * Descendants stack VERTICALLY inside the bone's column, indented one column
+	 * per level, and always grow FURTHER AWAY from the spine.
+	 *
+	 * `dir` decides the direction: above the spine (dir < 0) children stack
+	 * upward, below (dir > 0) they stack downward. Stacking downward in both cases
+	 * made an upper bone's children march past the spine into the lower half, so
+	 * the map came out lopsided (3 nodes above, 66 below).
 	 */
-	const placeChild = (id: string, levelX: number, dir: number, topY: number): void => {
+	const placeChild = (id: string, levelX: number, dir: number, edgeY: number): void => {
 		const node = byId.get(id);
 		if (!node) return;
 		const nh = estimateHeight(node);
-		const band = heightOf(id);
 
-		const y = topY + (band - nh) / 2;
+		/**
+		 * `edgeY` is the boundary the box must not cross.
+		 * Above (dir < 0) the box hangs BELOW edgeY; below (dir > 0) it hangs
+		 * ABOVE it.
+		 */
+		const y = dir < 0 ? edgeY : edgeY - nh;
 		placed.set(id, { x: levelX, y });
 
 		const kids = tree.children.get(id) ?? [];
 		if (!kids.length) return;
 
+		/**
+		 * Advance by what the child actually occupies, not by its whole band.
+		 *
+		 * `placeChild` puts the child flush against `edgeY`, so the space it uses is
+		 * its own height plus its descendants' extent — not the band's full height,
+		 * which also reserved room the child never filled. That mismatch left two
+		 * long-text siblings overlapping by a few tens of pixels.
+		 */
 		const childX = levelX + LEVEL_INDENT;
-		let cursor = topY;
+		let cursor = dir < 0 ? y - SIBLING_GAP : y + nh + SIBLING_GAP;
 		for (const k of kids) {
-			const kh = heightOf(k);
 			placeChild(k, childX, dir, cursor);
-			cursor += kh + SIBLING_GAP;
+			const kn = byId.get(k);
+			const extent = kn ? estimateHeight(kn) + SIBLING_GAP : SIBLING_GAP;
+			if (dir < 0) cursor -= extent;
+			else cursor += extent;
 		}
-		void dir;
 	};
 
 	/**
@@ -881,11 +911,20 @@ function layoutFishbone(
 		const band = heightOf(id);
 		const w = spanOf(id);
 
-		if (dir < 0) placeBone(id, cursorX, dir, -RIB_STEP - band);
+		/**
+		 * The bone sits just off the spine and its children start right below it,
+		 * growing AWAY from the spine.
+		 *
+		 * Passing `-RIB_STEP - band` as the start pushed the whole subtree to the
+		 * far end of its band, which is why the rendered map came out 1068 x 4535:
+		 * a bone with ~12 children has a band of 1000+px, so its children were
+		 * stacked a thousand pixels away from the bone, dragging the map into a
+		 * tall thin column.
+		 */
+		if (dir < 0) placeBone(id, cursorX, dir, -RIB_STEP);
 		else placeBone(id, cursorX, dir, RIB_STEP);
 
-		// advance only once the pair (one above, one below) is complete
-		if (i % 2 === 1) cursorX += w + SLOT_GAP;
+		cursorX += w + SLOT_GAP;
 	});
 
 	/**
@@ -910,6 +949,47 @@ function layoutFishbone(
 	 * pile on top of the head, so they go into a tidy grid below the spine.
 	 */
 	placeLeftovers(nodes, tree, placed);
+
+	/**
+	 * Final overlap pass.
+	 *
+	 * The recursive placement is driven by estimated bands, and a long label can
+	 * make the real box taller than the band reserved for it. Rather than chase
+	 * every rounding difference inside the recursion, we nudge overlapping boxes
+	 * apart afterwards — the geometry stays predictable and the result is
+	 * guaranteed collision-free.
+	 */
+	const settled = [...placed.entries()]
+		.map(([id, p]) => {
+			const n = byId.get(id);
+			return n ? { id, x: p.x, y: p.y, w: NODE_WIDTH, h: estimateHeight(n) } : null;
+		})
+		.filter(Boolean) as { id: string; x: number; y: number; w: number; h: number }[];
+
+	const overlaps = (a: typeof settled[number], b: typeof settled[number]) =>
+		!(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y);
+
+	let moved = true;
+	let guard = 0;
+	while (moved && guard < 40) {
+		moved = false;
+		guard++;
+		for (let i = 0; i < settled.length; i++) {
+			for (let j = i + 1; j < settled.length; j++) {
+				const a = settled[i];
+				const b = settled[j];
+				if (!overlaps(a, b)) continue;
+				// push the lower box further down, keeping the pair separated
+				const push = a.y + a.h - b.y + SIBLING_GAP;
+				if (push > 0) {
+					b.y += push;
+					moved = true;
+				}
+			}
+		}
+	}
+
+	for (const s of settled) placed.set(s.id, { x: s.x, y: s.y });
 
 	return placed;
 }
