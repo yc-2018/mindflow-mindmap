@@ -7,6 +7,10 @@ export interface Env {
 	ADMIN_EMAIL: string;
 	ADMIN_PASSWORD: string;
 	SESSION_SECRET: string;
+	/** Resend API key used to deliver registration codes. */
+	RESEND_API_KEY?: string;
+	/** Verified sender, e.g. `MindFlow <noreply@mail.245556.xyz>`. */
+	MAIL_FROM?: string;
 	// Optional
 	PIXHOST_API?: string;
 }
@@ -214,6 +218,223 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
 	if (!user) return fail('未登录', 401);
 	return json({ user });
 }
+
+// ---------- self-service registration ----------
+
+/**
+ * The ONLY addresses allowed to self-register.
+ *
+ * The product rule is "a QQ mailbox whose local part is all digits", e.g.
+ * 123456789@qq.com. Anything else (foxmail.com, letters, dots) is rejected.
+ */
+const QQ_DIGITS_RE = /^\d{5,12}@qq\.com$/;
+
+const CODE_TTL_MS = 10 * 60 * 1000; // a code stays valid for 10 minutes
+const RESEND_COOLDOWN_MS = 60 * 1000; // one request per minute per address
+const MAX_ATTEMPTS = 5;
+
+function normalizeEmail(raw: string): string {
+	return raw.trim().toLowerCase();
+}
+
+/** A 6-digit numeric code. */
+function sixDigits(): string {
+	const bytes = new Uint8Array(6);
+	crypto.getRandomValues(bytes);
+	let out = '';
+	for (const b of bytes) out += String(b % 10);
+	return out;
+}
+
+/**
+ * Send the verification code through Resend.
+ *
+ * Returns `{ ok: false, message }` when the API rejects the request, so the
+ * caller can tell the user instead of silently dropping the code.
+ */
+async function sendVerifyEmail(
+	env: Env,
+	to: string,
+	code: string,
+): Promise<{ ok: boolean; message?: string }> {
+	const apiKey = env.RESEND_API_KEY;
+	const from = env.MAIL_FROM || 'MindFlow <noreply@mail.245556.xyz>';
+
+	if (!apiKey) {
+		return { ok: false, message: '邮件服务未配置' };
+	}
+
+	const html = `
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;color:#1e2432">
+  <h2 style="margin:0 0 8px;font-size:20px;font-weight:600">MindFlow 注册验证码</h2>
+  <p style="margin:0 0 24px;color:#5b6478;font-size:14px;line-height:1.6">
+    你正在注册 MindFlow 思维导图，请输入下面的验证码完成注册。
+  </p>
+  <div style="background:#f4f6fb;border-radius:12px;padding:20px;text-align:center;margin:0 0 24px">
+    <span style="font-size:32px;font-weight:700;letter-spacing:8px;color:#4f46e5;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${code}</span>
+  </div>
+  <p style="margin:0 0 8px;color:#5b6478;font-size:13px;line-height:1.6">
+    验证码 <strong>10 分钟</strong>内有效，请勿告诉他人。
+  </p>
+  <p style="margin:0;color:#8b94a7;font-size:12px;line-height:1.6">
+    如果不是你本人操作，忽略这封邮件即可，不会产生任何账号。
+  </p>
+</div>`.trim();
+
+	const text =
+		`MindFlow 注册验证码\n\n` +
+		`${code}\n\n` +
+		`验证码 10 分钟内有效，请勿告诉他人。\n` +
+		`如果不是你本人操作，忽略这封邮件即可。\n`;
+
+	try {
+		const res = await fetch('https://api.resend.com/emails', {
+			method: 'POST',
+			headers: {
+				authorization: `Bearer ${apiKey}`,
+				'content-type': 'application/json',
+			},
+			body: JSON.stringify({
+				from,
+				to: [to],
+				subject: 'MindFlow 注册验证码',
+				html,
+				text,
+			}),
+		});
+
+		if (!res.ok) {
+			const detail = await res.text().catch(() => '');
+			// keep the upstream reason short: it is shown to the user
+			let message = '验证码发送失败，请稍后再试';
+			try {
+				const parsed = JSON.parse(detail) as { message?: string };
+				if (parsed?.message) message = parsed.message;
+			} catch {
+				/* keep the generic message */
+			}
+			console.error('resend rejected:', res.status, detail.slice(0, 200));
+			return { ok: false, message };
+		}
+
+		return { ok: true };
+	} catch (e) {
+		console.error('resend request failed:', e instanceof Error ? e.message : e);
+		return { ok: false, message: '邮件服务暂时不可用，请稍后再试' };
+	}
+}
+
+async function handleRequestCode(request: Request, env: Env): Promise<Response> {
+	const body = (await request.json().catch(() => null)) as { email?: string } | null;
+	if (!body?.email) return fail('请输入邮箱');
+
+	const email = normalizeEmail(body.email);
+	if (!QQ_DIGITS_RE.test(email)) {
+		return fail('只支持纯数字的 QQ 邮箱（如 123456789@qq.com）');
+	}
+
+	// already registered?
+	const exists = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+	if (exists) return fail('该邮箱已注册，请直接登录');
+
+	const now = Date.now();
+
+	// rate limit: at most one request per minute per address
+	const recent = await env.DB.prepare(
+		'SELECT created_at FROM verify_codes WHERE email = ? ORDER BY created_at DESC LIMIT 1',
+	)
+		.bind(email)
+		.first<{ created_at: number }>();
+	if (recent && now - recent.created_at < RESEND_COOLDOWN_MS) {
+		const wait = Math.ceil((RESEND_COOLDOWN_MS - (now - recent.created_at)) / 1000);
+		return fail(`请 ${wait} 秒后再试`, 429);
+	}
+
+	const code = sixDigits();
+	await env.DB.prepare(
+		'INSERT INTO verify_codes (id, email, code, attempts, created_at, expires_at) VALUES (?, ?, ?, 0, ?, ?)',
+	)
+		.bind(randomId(), email, code, now, now + CODE_TTL_MS)
+		.run();
+
+	/**
+	 * Deliver the code through Resend's HTTP API.
+	 *
+	 * Workers cannot speak SMTP (port 25 is blocked and the TCP socket API has
+	 * no TLS layer), but a plain `fetch()` to an email API works fine — which is
+	 * why the sending channel is Resend rather than the QQ mailbox.
+	 */
+	const sent = await sendVerifyEmail(env, email, code);
+	if (!sent.ok) {
+		// the code row is useless without a delivery; mark it used so it cannot
+		// be replayed, and tell the user to retry
+		await env.DB.prepare('UPDATE verify_codes SET used_at = ? WHERE email = ? AND used_at IS NULL')
+			.bind(Date.now(), email)
+			.run();
+		return fail(sent.message || '验证码发送失败，请稍后再试', 502);
+	}
+
+	await env.DB.prepare(
+		'UPDATE verify_codes SET sent_at = ? WHERE email = ? AND sent_at IS NULL',
+	)
+		.bind(Date.now(), email)
+		.run();
+
+	return json({ ok: true, sent: true });
+}
+
+async function handleRegister(request: Request, env: Env): Promise<Response> {
+	const body = (await request.json().catch(() => null)) as
+		| { email?: string; code?: string; password?: string; name?: string }
+		| null;
+	if (!body?.email || !body?.code || !body?.password) {
+		return fail('请填写邮箱、验证码和密码');
+	}
+
+	const email = normalizeEmail(body.email);
+	if (!QQ_DIGITS_RE.test(email)) {
+		return fail('只支持纯数字的 QQ 邮箱（如 123456789@qq.com）');
+	}
+	if (body.password.length < 6) return fail('密码至少 6 位');
+
+	const exists = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+	if (exists) return fail('该邮箱已注册，请直接登录');
+
+	const row = await env.DB.prepare(
+		'SELECT id, code, attempts, expires_at, used_at FROM verify_codes WHERE email = ? ORDER BY created_at DESC LIMIT 1',
+	)
+		.bind(email)
+		.first<{ id: string; code: string; attempts: number; expires_at: number; used_at: number | null }>();
+
+	if (!row) return fail('请先获取验证码');
+	if (row.used_at) return fail('验证码已使用，请重新获取');
+	if (Date.now() > row.expires_at) return fail('验证码已过期，请重新获取');
+	if (row.attempts >= MAX_ATTEMPTS) return fail('尝试次数过多，请重新获取验证码', 429);
+
+	if (row.code !== body.code.trim()) {
+		await env.DB.prepare('UPDATE verify_codes SET attempts = attempts + 1 WHERE id = ?')
+			.bind(row.id)
+			.run();
+		return fail('验证码不正确');
+	}
+
+	// mark used first so a double submit cannot create two accounts
+	await env.DB.prepare('UPDATE verify_codes SET used_at = ? WHERE id = ?').bind(Date.now(), row.id).run();
+
+	const { hash, salt } = await hashPassword(body.password);
+	const name = (body.name || '').trim() || email.split('@')[0];
+	const id = randomId();
+	await env.DB.prepare(
+		'INSERT INTO users (id, email, name, password_hash, salt, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+	)
+		.bind(id, email, name, hash, salt, 'user', Date.now())
+		.run();
+
+	const user: SessionUser = { id, email, name, role: 'user' };
+	const token = await issueSession(user, env);
+	return json({ user }, 201, { 'Set-Cookie': sessionCookie(token, isSecureRequest(request)) });
+}
+
 
 interface MapRow {
 	id: string;
@@ -462,6 +683,10 @@ async function route(request: Request, env: Env): Promise<Response> {
 	if (path === '/api/auth/login' && method === 'POST') return handleLogin(request, env);
 	if (path === '/api/auth/logout' && method === 'POST') return handleLogout(request);
 	if (path === '/api/auth/me' && method === 'GET') return handleMe(request, env);
+
+	// self-service registration (public)
+	if (path === '/api/auth/request-code' && method === 'POST') return handleRequestCode(request, env);
+	if (path === '/api/auth/register' && method === 'POST') return handleRegister(request, env);
 
 	// shared map (public)
 	const sharedMatch = path.match(/^\/api\/share\/([A-Za-z0-9]+)$/);

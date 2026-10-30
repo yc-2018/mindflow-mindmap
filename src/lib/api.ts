@@ -68,6 +68,19 @@ export const api = {
 	logout: () => req<{ ok: true }>('/api/auth/logout', { method: 'POST' }),
 	me: () => req<{ user: User }>('/api/auth/me'),
 
+	/** Ask the server to email a registration code. */
+	requestCode: (email: string) =>
+		req<{ ok: true; sent: boolean }>('/api/auth/request-code', {
+			method: 'POST',
+			body: JSON.stringify({ email }),
+		}),
+	/** Complete self-service registration with the emailed code. */
+	register: (payload: { email: string; code: string; password: string; name?: string }) =>
+		req<{ user: User }>('/api/auth/register', {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
+
 	listMaps: () => req<{ maps: MapSummary[] }>('/api/maps'),
 	createMap: (title: string, data: string) =>
 		req<{ map: MapSummary }>('/api/maps', { method: 'POST', body: JSON.stringify({ title, data }) }),

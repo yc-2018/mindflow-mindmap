@@ -8,6 +8,16 @@
 	"observability": {
 		"enabled": true
 	},
+	/**
+	 * Non-secret mail settings.
+	 *
+	 * RESEND_API_KEY is a secret: set it with
+	 *   wrangler secret put RESEND_API_KEY
+	 * MAIL_FROM must use the verified sending domain.
+	 */
+	"vars": {
+		"MAIL_FROM": "MindFlow <noreply@mail.245556.xyz>"
+	},
 	"assets": {
 		"directory": "./dist",
 		"binding": "ASSETS",

@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { Logo } from '../components/Logo';
 import { api, ApiError, type User } from '../lib/api';
 import { toast } from '../lib/toast';
+import { navigate } from '../lib/router';
 
 interface LoginProps {
 	onSuccess: (user: User) => void;
@@ -72,7 +73,12 @@ export default function Login({ onSuccess }: LoginProps) {
 					{busy ? '登录中…' : '登录'}
 				</button>
 
-				<p className="auth__hint">账号由管理员创建，如需开通请联系管理员。</p>
+				<p className="auth__hint">
+					还没有账号？
+					<button type="button" className="auth__link" onClick={() => navigate('/register')}>
+						用 QQ 邮箱注册
+					</button>
+				</p>
 			</form>
 		</div>
 	);

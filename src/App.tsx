@@ -3,6 +3,7 @@ import { api, ApiError, type User } from './lib/api';
 import { navigate, usePathname } from './lib/router';
 import { Toaster, toast } from './lib/toast';
 import Login from './pages/Login';
+import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import Admin from './pages/Admin';
 import Editor from './pages/Editor';
@@ -17,6 +18,7 @@ export default function App() {
 	const mapMatch = path.match(/^\/map\/([A-Za-z0-9]+)$/);
 	const shareMatch = path.match(/^\/s\/([A-Za-z0-9]+)$/);
 	const isAdminPage = path === '/admin';
+	const isRegisterPage = path === '/register';
 
 	useEffect(() => {
 		api
@@ -55,12 +57,21 @@ export default function App() {
 	if (!user) {
 		return (
 			<>
-				<Login
-					onSuccess={(u) => {
-						setUser(u);
-						navigate('/');
-					}}
-				/>
+				{isRegisterPage ? (
+					<Register
+						onSuccess={(u) => {
+							setUser(u);
+							navigate('/');
+						}}
+					/>
+				) : (
+					<Login
+						onSuccess={(u) => {
+							setUser(u);
+							navigate('/');
+						}}
+					/>
+				)}
 				<Toaster />
 			</>
 		);

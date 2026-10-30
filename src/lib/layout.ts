@@ -786,6 +786,7 @@ function layoutIncremental(
 	nodes: MindNode[],
 	edges: Edge[],
 	structure: StructureId,
+	hiddenIds: Set<string> = new Set(),
 ): MindNode[] {
 	const tree = buildTree(nodes, edges);
 	const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -798,8 +799,9 @@ function layoutIncremental(
 		(n) =>
 			Number.isFinite(n.position?.x) &&
 			Number.isFinite(n.position?.y) &&
-			// a node explicitly marked `needsPlacement` is treated as new
-			n.data?.needsPlacement !== true,
+			// nodes hidden behind a collapsed ancestor keep their stored spot;
+			// everything else is "new" when flagged `needsPlacement`
+			(hiddenIds.has(n.id) || n.data?.needsPlacement !== true),
 	);
 	const settledIds = new Set(settled.map((n) => n.id));
 
@@ -916,6 +918,36 @@ function layoutIncremental(
 }
 
 /**
+ * Ids of nodes that are hidden because an ancestor is collapsed.
+ *
+ * `buildTree` drops a collapsed node's children, so these nodes never get
+ * visited by the layout — they would be treated as detached orphans and flung
+ * into the leftovers row. Keeping their stored coordinates is what makes
+ * collapse -> save -> reload -> expand restore the original arrangement.
+ */
+function hiddenByCollapse(nodes: MindNode[], edges: Edge[]): Set<string> {
+	const children = new Map<string, string[]>();
+	for (const n of nodes) children.set(n.id, []);
+	for (const e of edges) {
+		const list = children.get(e.source);
+		if (list && children.has(e.target)) list.push(e.target);
+	}
+
+	const hidden = new Set<string>();
+	const walk = (id: string) => {
+		for (const child of children.get(id) ?? []) {
+			if (hidden.has(child)) continue; // also guards against cycles
+			hidden.add(child);
+			walk(child);
+		}
+	};
+	for (const n of nodes) {
+		if (n.data?.collapsed) walk(n.id);
+	}
+	return hidden;
+}
+
+/**
  * Layout the whole map using the chosen structure.
  *
  * `structure` defaults to the classic left-to-right mind map, so existing
@@ -942,8 +974,22 @@ export function layoutTree(
 	const keepPinned = options.keepPinned !== false;
 	const preserveExisting = options.preserveExisting === true;
 
+	/**
+	 * Nodes hidden behind a collapsed ancestor keep their stored coordinates.
+	 *
+	 * They are invisible right now, but the user expects them back where they
+	 * were when the branch is expanded again. Without this they were never
+	 * visited by the layout, fell through to `placeLeftovers`, and got parked in
+	 * a row far from their parent — the reported "收起后刷新再展开位置不对".
+	 */
+	const hiddenIds = hiddenByCollapse(nodes, edges);
+	const keepHiddenPosition = (n: MindNode) =>
+		hiddenIds.has(n.id) &&
+		Number.isFinite(n.position?.x) &&
+		Number.isFinite(n.position?.y);
+
 	if (preserveExisting) {
-		return layoutIncremental(nodes, edges, structure);
+		return layoutIncremental(nodes, edges, structure, hiddenIds);
 	}
 
 	const tree = buildTree(nodes, edges);
@@ -1031,6 +1077,10 @@ export function layoutTree(
 	}
 
 	const laidOut = nodes.map((n) => {
+		// Nodes hidden behind a collapsed ancestor are invisible right now; keep
+		// their stored spot so expanding the branch brings them back unchanged.
+		if (keepHiddenPosition(n)) return n;
+
 		// A pinned node keeps the position the user dragged it to; the auto-layout
 		// must not pull it back. Its children are still laid out relative to the
 		// tree, which is why only the pinned node itself is exempt.

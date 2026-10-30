@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
 	ArrowDownWideNarrow,
 	Download,
@@ -13,6 +13,7 @@ import {
 	Search,
 	Share2,
 	Trash2,
+	Upload,
 	Users,
 } from 'lucide-react';
 import '@xyflow/react/dist/style.css';
@@ -24,6 +25,7 @@ import { navigate } from '../lib/router';
 import { toast } from '../lib/toast';
 import { parseDoc, serializeDoc, type MapDoc, type MindNode } from '../lib/types';
 import { layoutTree } from '../lib/layout';
+import { importDoc } from '../lib/import';
 import { uid } from '../lib/uid';
 
 interface DashboardProps {
@@ -61,6 +63,8 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 	const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
 	const [sort, setSort] = useState<'updated' | 'created' | 'title'>('updated');
 	const [query, setQuery] = useState('');
+	const [importing, setImporting] = useState(false);
+	const fileRef = useRef<HTMLInputElement | null>(null);
 
 	const load = useCallback(async () => {
 		try {
@@ -156,6 +160,54 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 		toast('已导出 JSON', 'success');
 	}, []);
 
+	/**
+	 * Import a JSON file as a NEW map.
+	 *
+	 * Accepts MindFlow's own export and ProcessOn's export. The parsed document
+	 * is laid out fresh, so a file that carries no coordinates (ProcessOn) still
+	 * opens as a tidy map.
+	 */
+	const importFile = useCallback(
+		async (file: File) => {
+			if (importing) return;
+			setImporting(true);
+			try {
+				const text = await file.text();
+				const result = importDoc(text);
+
+				if (!result.doc.nodes.length) {
+					toast('文件里没有节点', 'error');
+					return;
+				}
+
+				// title: the file's own title, else the filename
+				const parsedTitle = (() => {
+					try {
+						const raw = JSON.parse(text) as { title?: string };
+						return typeof raw?.title === 'string' ? raw.title.trim() : '';
+					} catch {
+						return '';
+					}
+				})();
+				const fallback = file.name.replace(/\.json$/i, '');
+				const title = (parsedTitle || fallback || '导入的导图').slice(0, 80);
+
+				const created = await api.createMap(title, serializeDoc(result.doc));
+				setMaps((prev) => [created.map, ...prev]);
+
+				const kind = result.format === 'processon' ? 'ProcessOn' : 'MindFlow';
+				const extra = result.warnings.length ? `（${result.warnings[0]}）` : '';
+				toast(`已导入 ${result.doc.nodes.length} 个节点 · ${kind} 格式${extra}`, 'success');
+			} catch (err) {
+				toast(err instanceof Error ? err.message : '导入失败', 'error');
+			} finally {
+				setImporting(false);
+				if (fileRef.current) fileRef.current.value = '';
+			}
+		},
+		[importing],
+	);
+
 	const visible = useMemo(() => {
 		const q = query.trim().toLowerCase();
 		const list = q ? maps.filter((m) => m.title.toLowerCase().includes(q)) : maps;
@@ -201,6 +253,26 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 						<Plus size={17} strokeWidth={2.2} />
 						新建
 					</button>
+					{/* Import: accepts MindFlow JSON and ProcessOn JSON. */}
+					<button
+						className="btn-ghost btn-icon-text"
+						onClick={() => fileRef.current?.click()}
+						disabled={importing}
+						title="导入 JSON（支持 MindFlow 和 ProcessOn 格式）"
+					>
+						<Upload size={15} strokeWidth={1.9} />
+						{importing ? '导入中…' : '导入'}
+					</button>
+					<input
+						ref={fileRef}
+						type="file"
+						accept=".json,application/json"
+						hidden
+						onChange={(e) => {
+							const file = e.target.files?.[0];
+							if (file) void importFile(file);
+						}}
+					/>
 					{maps.length ? (
 						<div className="dash__filters">
 							<div className="dash__search-wrap">
