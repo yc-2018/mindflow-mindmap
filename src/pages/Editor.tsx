@@ -625,7 +625,9 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			 */
 			const rootNode = nodes.find((n) => n.data.tone === 'root');
 			let side: 'left' | 'right' | undefined;
-			const twoSided = structure === 'both' || structure === 'fishbone';
+			// only the two-sided structure needs side flags; the fishbone's
+			// bones alternate above/below the spine by order, no flags involved
+			const twoSided = structure === 'both';
 			if (parent && rootNode) {
 				if (parent.id !== rootNode.id) {
 					if (parent.data.side === 'left' || parent.data.side === 'right') {
@@ -813,7 +815,10 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			setStructure(sid);
 			setNodes((nds) => {
 				let next = nds;
-				if (sid === 'both' || sid === 'fishbone') {
+				// Side flags exist only for the two-sided structure. The fishbone
+				// alternates its branches above/below the spine by order, so the
+				// full relayout below is all it takes.
+				if (sid === 'both') {
 					const root = next.find((n) => n.data.tone === 'root');
 					if (root) {
 						const kids = childrenOf(edges, root.id);

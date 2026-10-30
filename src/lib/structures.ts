@@ -54,7 +54,10 @@ export function directionFor(structure: StructureId, node?: MindNode): Direction
 			// balanced on both sides: nodes carry their own side flag
 			return node?.data?.side === 'left' ? 'left' : 'right';
 		case 'fishbone':
-			return node?.data?.side === 'left' ? 'left' : 'right';
+			// the fishbone grows right: the head is on the left and the bones
+			// lean toward the tail. Side flags are meaningless here — the layout
+			// alternates branches above/below the spine by their order.
+			return 'right';
 		case 'right':
 		case 'balanced':
 		default:

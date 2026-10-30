@@ -21,20 +21,23 @@ export interface MindEdgeData extends Record<string, unknown> {
 	label?: string;
 	/** True while the connector label is being edited in place. */
 	editing?: boolean;
+	/**
+	 * Fishbone drawing style, set by withAdaptiveHandles for the fishbone
+	 * structure: "bone" = the spine run plus the 60° diagonal, "rib" = the
+	 * horizontal line from the bone to the box's left edge.
+	 */
+	fishbone?: 'bone' | 'rib' | null;
 }
 
 /**
  * Orthogonal connector: horizontal run first, then vertical, with a rounded
  * corner. The vertical happens at the TARGET's x.
  *
- * This is what makes a fishbone's ribs cross-free: every child of one parent
- * shares the parent's y, so their horizontal runs are COLLINEAR (they overlap
- * along a single line, which reads as one rib), and their vertical runs all sit
- * on the same target column — also collinear. Collinear segments never cross.
- *
- * Any curved shape instead bulges outside the segment and cuts through its
- * siblings: a bezier scored 28 crossings on a real 80-node map, a smooth step
- * 75, and a straight line 30.
+ * Every child of one parent shares the parent's y, so their horizontal runs
+ * are COLLINEAR (they overlap along a single line, which reads as one rib),
+ * and their vertical runs all sit on the same target column — also collinear.
+ * Collinear segments never cross; anything that bulges outside the segment
+ * (a bezier scored 28 crossings on a real 80-node map) cuts through siblings.
  */
 function orthPath(sx: number, sy: number, tx: number, ty: number, radius = 8): string {
 	const dx = tx - sx;
@@ -61,8 +64,15 @@ function orthPath(sx: number, sy: number, tx: number, ty: number, radius = 8): s
 	);
 }
 
+/** A 60° bone rises V over V·TAN30 — the slope of every ProcessOn ishikawa bone. */
+const BONE_TAN30 = 1 / Math.sqrt(3);
+
 /**
  * Pick a connector path based on which handles the edge uses.
+ *
+ * Fishbone edges come first: their shapes are fixed by the fishbone geometry
+ * itself (one spine, 60° diagonals, horizontal ribs), not by the generic
+ * elbow/curve rules.
  *
  * `lib/handles.ts` already flips the handles when a node sits behind its parent
  * (source-left / target-right), so by the time we get here the geometry is
@@ -77,8 +87,41 @@ function pickPath(args: {
 	targetPosition: EdgeProps['targetPosition'];
 	sourceHandleId?: string | null;
 	targetHandleId?: string | null;
+	fishbone?: 'bone' | 'rib' | null;
 }) {
 	const { sourceX, sourceY, targetX, targetY, sourceHandleId, targetHandleId } = args;
+
+	if (args.fishbone === 'bone') {
+		/**
+		 * The spine run plus the bone. The head's right handle sits ON the spine
+		 * and the branch box's bottom/top handle is the bone's tip, so the foot —
+		 * where the diagonal leaves the spine — is the tip shifted back along the
+		 * 60° slope. Every bone's spine run is collinear, so the whole set
+		 * renders as one spine line with bones branching off it, exactly like
+		 * ProcessOn's fishbone.
+		 */
+		const footX = targetX - Math.abs(targetY - sourceY) * BONE_TAN30;
+		return {
+			path: `M${sourceX},${sourceY} L${footX},${sourceY} L${targetX},${targetY}`,
+			labelX: (sourceX + footX) / 2,
+			labelY: sourceY - 14,
+		};
+	}
+
+	if (args.fishbone === 'rib') {
+		/**
+		 * A rib: a horizontal line from the BONE to the box's left edge. The
+		 * source handle is the branch box's bone-side tip; the bone is a 60°
+		 * line through that point, so its crossing at the rib's level is the
+		 * tip shifted back by the vertical drop times the same slope.
+		 */
+		const boneX = sourceX - Math.abs(targetY - sourceY) * BONE_TAN30;
+		return {
+			path: `M${boneX},${targetY} L${targetX},${targetY}`,
+			labelX: (boneX + targetX) / 2,
+			labelY: targetY - 12,
+		};
+	}
 
 	const dx = Math.abs(targetX - sourceX);
 	const dy = Math.abs(targetY - sourceY);
@@ -184,6 +227,7 @@ function MindEdge({
 		targetPosition,
 		sourceHandleId,
 		targetHandleId,
+		fishbone: edgeData.fishbone ?? null,
 	});
 
 	const active = selected || hovered;

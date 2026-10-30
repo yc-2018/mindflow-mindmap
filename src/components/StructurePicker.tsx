@@ -101,18 +101,20 @@ function StructureIcon({ id }: { id: StructureId }) {
 				</svg>
 			);
 		case 'fishbone':
+			// ProcessOn-style 左侧鱼骨图: head on the left, one spine, and 60°
+			// bones leaning AWAY from the head with their boxes at the tips
 			return (
 				<svg viewBox="0 0 60 34" className="struct-icon">
-					{box(2, 15, 12, 5, '#34c48b')}
-					{line('M14 17.5 h42')}
-					{line('M24 17.5 l-6 -9 M36 17.5 l-6 -9 M48 17.5 l-6 -9')}
-					{box(15, 4, 9, 6)}
-					{box(27, 4, 9, 6)}
-					{box(39, 4, 9, 6)}
-					{line('M24 17.5 l-6 9 M36 17.5 l-6 9 M48 17.5 l-6 9')}
-					{box(15, 25, 9, 6)}
-					{box(27, 25, 9, 6)}
-					{box(39, 25, 9, 6)}
+					{box(1, 14, 9, 7, '#34c48b')}
+					{line('M10 17.5 h48')}
+					{line('M18 17.5 l7 -8.5 M32 17.5 l7 -8.5 M46 17.5 l7 -8.5')}
+					{box(21, 4.5, 9, 5.5)}
+					{box(35, 4.5, 9, 5.5)}
+					{box(49, 4.5, 9, 5.5)}
+					{line('M18 17.5 l7 8.5 M32 17.5 l7 8.5 M46 17.5 l7 8.5')}
+					{box(21, 24, 9, 5.5)}
+					{box(35, 24, 9, 5.5)}
+					{box(49, 24, 9, 5.5)}
 				</svg>
 			);
 		default:

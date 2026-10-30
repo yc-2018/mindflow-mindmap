@@ -1,6 +1,7 @@
 import type { Edge } from '@xyflow/react';
 import type { MindNode } from './types';
 import { DEFAULT_STRUCTURE, getStructure, type Direction, type StructureId } from './structures';
+import { estimateHeight } from './layout';
 
 /**
  * Handle ids on a mind node. Each side carries a source and a target handle so a
@@ -43,8 +44,16 @@ export function handlesForDirection(dir: Direction): { sourceHandle: string; tar
  * dragged to the other side of the root kept its old flag, so connectors left the
  * wrong edge and looped around.
  *
- * Vertical structures use bottom→top / top→bottom; the fishbone enters ribs from
- * their top/bottom edge because they hang off a horizontal spine.
+ * Vertical structures use bottom→top / top→bottom.
+ *
+ * The fishbone is different again, and matches how ProcessOn draws it:
+ *  - head→branch connectors leave the head's RIGHT edge (they run along the
+ *    spine and then rise as the 60° bone into the branch box's bottom/top edge)
+ *  - branch→second-level connectors leave the branch box's BOTTOM/TOP edge —
+ *    the tip of its bone — so the drawer can rebuild the bone line from the
+ *    handle position
+ *  - deeper levels are ordinary forward connectors
+ * `data.fishbone` tells MindEdge which drawing style ("bone" or "rib") to use.
  */
 export function withAdaptiveHandles(
 	nodes: MindNode[],
@@ -57,6 +66,20 @@ export function withAdaptiveHandles(
 	const sid = getStructure(structure);
 	const vertical = sid === 'down' || sid === 'up';
 
+	// facts the fishbone connectors need: the spine level, the head's id, and
+	// each node's parent (to tell a branch from a rib from a deep level)
+	let spineY = 0;
+	let fishRootId: string | undefined;
+	const parentOfId = new Map<string, string>();
+	if (sid === 'fishbone') {
+		const root = nodes.find((n) => n.data?.tone === 'root');
+		fishRootId = root?.id;
+		spineY = root ? root.position.y + estimateHeight(root) / 2 : 0;
+		for (const e of edges) if (!parentOfId.has(e.target)) parentOfId.set(e.target, e.source);
+	}
+
+	const centerY = (n: MindNode) => n.position.y + estimateHeight(n) / 2;
+
 	return edges.map((edge) => {
 		const s = byId.get(edge.source);
 		const t = byId.get(edge.target);
@@ -64,6 +87,8 @@ export function withAdaptiveHandles(
 
 		let sourceHandle: string;
 		let targetHandle: string;
+		/** drawing style for MindEdge; only set in the fishbone structure */
+		let fishbone: 'bone' | 'rib' | null = null;
 
 		if (vertical) {
 			// grow downward: parent bottom -> child top; upward: parent top -> child bottom
@@ -76,33 +101,31 @@ export function withAdaptiveHandles(
 				targetHandle = childBelow ? HANDLE.targetBottom : HANDLE.targetTop;
 			}
 		} else if (sid === 'fishbone') {
-			/**
-			 * Fishbone connectors.
-			 *
-			 * A rib hangs off the spine, so the head→rib line is horizontal and the
-			 * rib→child line is vertical. Which handle a rib's children use depends
-			 * on whether they sit above or below it.
-			 *
-			 * The test is deliberately NOT a ratio: a rib's children are directly
-			 * above/below it with only one column of horizontal offset, so the
-			 * vertical component is small in absolute terms but still the dominant
-			 * direction. Comparing |dy| against |dx| is enough — a ratio threshold
-			 * mis-classified them as horizontal, which made React Flow draw arcs
-			 * that crossed the neighbouring ribs (28 crossings on a real map).
-			 */
-			const sc = { x: s.position.x + NODE_W / 2, y: s.position.y };
-			const tc = { x: t.position.x + NODE_W / 2, y: t.position.y };
-			const dx = Math.abs(tc.x - sc.x);
-			const dy = tc.y - sc.y;
-
-			if (Math.abs(dy) >= dx) {
-				// the child is above/below the parent: enter from its facing edge
+			if (edge.source === fishRootId) {
+				/**
+				 * The spine + one bone. The head's right handle sits ON the spine
+				 * (the layout centres the head on it), and the branch box's
+				 * bottom/top handle is the bone's tip — from those two points
+				 * MindEdge rebuilds the exact 60° diagonal.
+				 */
+				fishbone = 'bone';
 				sourceHandle = HANDLE.sourceRight;
-				targetHandle = dy < 0 ? HANDLE.targetBottom : HANDLE.targetTop;
+				targetHandle = centerY(t) < spineY ? HANDLE.targetBottom : HANDLE.targetTop;
+			} else if (parentOfId.get(edge.source) === fishRootId) {
+				/**
+				 * A rib: horizontal from the bone to the box's left edge. The
+				 * source handle is the branch box's bone-side edge (bottom for
+				 * up-bones, top for down-bones), because the drawer walks the
+				 * 60° bone back down from that point to where the rib leaves it.
+				 */
+				fishbone = 'rib';
+				sourceHandle = centerY(s) < spineY ? HANDLE.sourceBottom : HANDLE.sourceTop;
+				targetHandle = HANDLE.targetLeft;
 			} else {
-				// side-by-side: plain horizontal connector
-				sourceHandle = tc.x >= sc.x ? HANDLE.sourceRight : HANDLE.sourceLeft;
-				targetHandle = tc.x >= sc.x ? HANDLE.targetLeft : HANDLE.targetRight;
+				// deeper levels: plain right-growing connectors
+				const forward = t.position.x + NODE_W / 2 >= s.position.x + NODE_W / 2;
+				sourceHandle = forward ? HANDLE.sourceRight : HANDLE.sourceLeft;
+				targetHandle = forward ? HANDLE.targetLeft : HANDLE.targetRight;
 			}
 		} else {
 			/**
@@ -118,10 +141,16 @@ export function withAdaptiveHandles(
 			targetHandle = forward ? HANDLE.targetLeft : HANDLE.targetRight;
 		}
 
-		if (edge.sourceHandle === sourceHandle && edge.targetHandle === targetHandle) {
+		const prevTag =
+			(edge.data as { fishbone?: 'bone' | 'rib' | null } | undefined)?.fishbone ?? null;
+		if (
+			edge.sourceHandle === sourceHandle &&
+			edge.targetHandle === targetHandle &&
+			prevTag === fishbone
+		) {
 			return edge; // unchanged, keep referential identity for memoisation
 		}
-		return { ...edge, sourceHandle, targetHandle };
+		return { ...edge, sourceHandle, targetHandle, data: { ...edge.data, fishbone } };
 	});
 }
 

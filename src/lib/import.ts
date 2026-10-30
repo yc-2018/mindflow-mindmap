@@ -78,6 +78,10 @@ function mapStructure(raw: string | undefined): string {
 		case 'mind_up':
 			return 'up';
 		case 'mind_fishbone':
+		// ProcessOn's ishikawa (石川/鱼骨) skeletons — 向左 has the head on
+		// the left, 向右 on the right; we render one fishbone (head left)
+		case 'mind_ishikawa_left':
+		case 'mind_ishikawa_right':
 			return 'fishbone';
 		case 'mind_free':
 		case 'mind_map':
