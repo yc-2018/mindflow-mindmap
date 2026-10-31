@@ -3,12 +3,15 @@ import { ChevronLeft, Download, Eye, FileText, List, PenLine, SquareSplitHorizon
 
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import AutoSaveToggle from '../components/AutoSaveToggle';
+import ShareControl from '../components/ShareControl';
 import { confirmLeave } from '../lib/leaveGuard';
 import { useTheme } from '../lib/themeContext';
 import { navigate } from '../lib/router';
 import { toast } from '../lib/toast';
 
 interface Props {
+	/** Which document is open — the 分享 control needs it. */
+	mapId: string;
 	title: string;
 	markdown: string;
 	onChange: (next: string) => void;
@@ -19,6 +22,8 @@ interface Props {
 	saveHint?: string | null;
 	/** Unsaved flag: drives the 保存 button and the leave prompt. */
 	dirty?: boolean;
+	/** Existing share token, if the document is already shared. */
+	shareToken?: string | null;
 	readOnly?: boolean;
 }
 
@@ -62,6 +67,7 @@ function extractHeadings(src: string): Heading[] {
 }
 
 export default function MarkdownEditor({
+	mapId,
 	title,
 	markdown,
 	onChange,
@@ -69,6 +75,7 @@ export default function MarkdownEditor({
 	onSave,
 	saveHint,
 	dirty = false,
+	shareToken = null,
 	readOnly = false,
 }: Props) {
 	const theme = useTheme();
@@ -171,6 +178,8 @@ export default function MarkdownEditor({
 				</div>
 				<div className="editor__right">
 					{readOnly ? null : <AutoSaveToggle dirty={dirty} onSave={onSave} />}
+
+					{readOnly ? null : <ShareControl mapId={mapId} title={title} initialToken={shareToken} />}
 
 					{/* view mode: three explicit choices, not a single toggle */}
 					<div className="md-viewtabs">

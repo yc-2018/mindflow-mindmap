@@ -35,6 +35,8 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 	const [markdown, setMarkdown] = useState('');
 	const [drawioXml, setDrawioXml] = useState('');
 	const [loading, setLoading] = useState(true);
+	/** Current share token, so the editors' 分享 button reflects the live state. */
+	const [shareToken, setShareToken] = useState<string | null>(null);
 
 	const saveTimer = useRef<number | null>(null);
 	const latest = useRef({ title: '', markdown: '', drawioXml: '', kind: 'mind' as DocKind });
@@ -61,6 +63,7 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 				const k = docKind(doc);
 				setTitle(map.title);
 				setKind(k);
+				setShareToken(map.shareToken ?? null);
 				if (k === 'md') setMarkdown(doc.markdown ?? '');
 				else if (k === 'drawio') setDrawioXml(doc.drawioXml ?? '');
 			})
@@ -212,6 +215,7 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 		return (
 			<>
 				<MarkdownEditor
+					mapId={mapId}
 					title={title}
 					markdown={markdown}
 					onChange={changeMarkdown}
@@ -219,6 +223,7 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 					onSave={() => void persist(true)}
 					saveHint={saveHint}
 					dirty={dirty}
+					shareToken={shareToken}
 					readOnly={readOnly}
 				/>
 				<Toaster />
@@ -230,6 +235,7 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 		return (
 			<>
 				<DrawioEditor
+					mapId={mapId}
 					title={title}
 					xml={drawioXml}
 					onChange={changeXml}
@@ -237,6 +243,7 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 					onSave={() => void persist(true)}
 					saveHint={saveHint}
 					dirty={dirty}
+					shareToken={shareToken}
 					readOnly={readOnly}
 				/>
 				<Toaster />

@@ -3,11 +3,14 @@ import { ChevronLeft, Download } from 'lucide-react';
 
 import DrawioLogo from '../components/DrawioLogo';
 import AutoSaveToggle from '../components/AutoSaveToggle';
+import ShareControl from '../components/ShareControl';
 import { confirmLeave } from '../lib/leaveGuard';
 import { navigate } from '../lib/router';
 import { toast } from '../lib/toast';
 
 interface Props {
+	/** Which document is open — the 分享 control needs it. */
+	mapId: string;
 	title: string;
 	xml: string;
 	onChange: (next: string) => void;
@@ -17,6 +20,8 @@ interface Props {
 	saveHint?: string | null;
 	/** Unsaved flag: drives the 保存 button and the leave prompt. */
 	dirty?: boolean;
+	/** Existing share token, if the diagram is already shared. */
+	shareToken?: string | null;
 	readOnly?: boolean;
 }
 
@@ -170,6 +175,7 @@ function installToggleStyles(iframe: HTMLIFrameElement | null): () => void {
 }
 
 export default function DrawioEditor({
+	mapId,
 	title,
 	xml,
 	onChange,
@@ -177,6 +183,7 @@ export default function DrawioEditor({
 	onSave,
 	saveHint,
 	dirty = false,
+	shareToken = null,
 	readOnly = false,
 }: Props) {
 	const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -296,6 +303,8 @@ export default function DrawioEditor({
 				</div>
 				<div className="editor__right">
 					{readOnly ? null : <AutoSaveToggle dirty={dirty} onSave={onSave} />}
+
+					{readOnly ? null : <ShareControl mapId={mapId} title={title} initialToken={shareToken} />}
 					{/*
 					  The panel toggles are draw.io's own menubar buttons (形状 / 格式),
 					  restyled by `installToggleStyles` to look like switches. We do NOT
