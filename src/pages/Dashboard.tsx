@@ -5,8 +5,6 @@ import {
 	Download,
 	FileText,
 	FolderOpen,
-	Link2,
-	Lock,
 	LogOut,
 	Map as MapIcon,
 	Pencil,
@@ -517,6 +515,12 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 								</button>
 
 								<div className="card__tools">
+									{/*
+									  One icon for both states — the highlight IS the state.
+									  The old pair (Lock when unshared, Link2 when shared) read
+									  as two different actions, and a lock on a "share" button
+									  suggests the file is encrypted rather than not yet shared.
+									*/}
 									<button
 										className={`tool${m.shareToken ? ' is-on' : ''}`}
 										title={m.shareToken ? '已分享 · 点击管理' : '分享'}
@@ -526,11 +530,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 											else void openShare(m);
 										}}
 									>
-										{m.shareToken ? (
-											<Link2 size={15} strokeWidth={1.9} />
-										) : (
-											<Lock size={15} strokeWidth={1.9} />
-										)}
+										<Share2 size={15} strokeWidth={1.9} />
 									</button>
 									<button
 										className="tool"
