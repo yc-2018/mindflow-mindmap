@@ -25,7 +25,7 @@
 	 */
 	"vars": {
 		"MAIL_FROM": "MindFlow <noreply@mail.245556.xyz>",
-		"TURNSTILE_SITE_KEY": ""
+		"TURNSTILE_SITE_KEY": "0x4AAAAAAFthAHMQ3o5URttz"
 	},
 	"assets": {
 		"directory": "./dist",
