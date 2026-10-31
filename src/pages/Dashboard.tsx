@@ -9,7 +9,6 @@ import {
 	Lock,
 	LogOut,
 	Map as MapIcon,
-	Network,
 	Pencil,
 	Plus,
 	RefreshCw,
@@ -23,6 +22,7 @@ import '@xyflow/react/dist/style.css';
 
 import Thumbnail from '../components/Thumbnail';
 import DrawioLogo from '../components/DrawioLogo';
+import MindLogo from '../components/MindLogo';
 import { Logo } from '../components/Logo';
 import { api, ApiError, type MapSummary, type User } from '../lib/api';
 import { navigate } from '../lib/router';
@@ -382,7 +382,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 						{newMenuOpen ? (
 							<div className="new-menu">
 								<button className="new-menu__item" onClick={() => void createMap('mind')}>
-									<Network size={15} strokeWidth={1.9} />
+									<MindLogo size={15} />
 									<span>
 										<b>思维导图</b>
 										<small>React Flow 画布</small>
@@ -468,7 +468,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 							className={`kindbar__chip${kindFilter === 'mind' ? ' is-active' : ''}`}
 							onClick={() => setKindFilter('mind')}
 						>
-							<Network size={13} strokeWidth={2} /> 思维导图{' '}
+							<MindLogo size={13} /> 思维导图{' '}
 							<span className="kindbar__count">{counts.mind}</span>
 						</button>
 						<button
@@ -577,7 +577,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 											if (k === 'md')
 												return <FileText size={14} strokeWidth={1.9} className="card__icon card__icon--md" />;
 											if (k === 'drawio') return <DrawioLogo size={14} className="card__icon" />;
-											return <Network size={14} strokeWidth={1.9} className="card__icon card__icon--mind" />;
+											return <MindLogo size={14} className="card__icon" />;
 										})()}
 										<span className="card__title" title={m.title}>
 											{m.title}

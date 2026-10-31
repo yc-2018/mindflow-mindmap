@@ -13,6 +13,8 @@ interface Props {
 	onTitleChange: (next: string) => void;
 	/** Called on explicit save (Ctrl+S / toolbar). */
 	onSave: () => void;
+	/** One-line save status for the header (「已自动保存 10:02:33」…). */
+	saveHint?: string | null;
 	readOnly?: boolean;
 }
 
@@ -61,6 +63,7 @@ export default function MarkdownEditor({
 	onChange,
 	onTitleChange,
 	onSave,
+	saveHint,
 	readOnly = false,
 }: Props) {
 	const theme = useTheme();
@@ -148,6 +151,11 @@ export default function MarkdownEditor({
 					<span className="save-state">
 						{stats.chars} 字 · {stats.lines} 行
 					</span>
+					{saveHint ? (
+						<span className={`save-state${saveHint === '保存失败，请重试' ? ' save-state--error' : ''}`}>
+							{saveHint}
+						</span>
+					) : null}
 				</div>
 				<div className="editor__right">
 					{/* view mode: three explicit choices, not a single toggle */}

@@ -31,6 +31,12 @@ export interface AdminUser {
 	created_at: number;
 }
 
+export interface CaptchaConfig {
+	/** True when the worker requires a Turnstile token for request-code. */
+	enabled: boolean;
+	siteKey: string | null;
+}
+
 export class ApiError extends Error {
 	status: number;
 	constructor(message: string, status: number) {
@@ -68,11 +74,13 @@ export const api = {
 	logout: () => req<{ ok: true }>('/api/auth/logout', { method: 'POST' }),
 	me: () => req<{ user: User }>('/api/auth/me'),
 
-	/** Ask the server to email a registration code. */
-	requestCode: (email: string) =>
+	/** Whether the register page must show a Turnstile challenge. */
+	captchaConfig: () => req<CaptchaConfig>('/api/auth/captcha'),
+	/** Ask the server to email a verification code (Turnstile token when enabled). */
+	requestCode: (email: string, turnstileToken?: string | null) =>
 		req<{ ok: true; sent: boolean }>('/api/auth/request-code', {
 			method: 'POST',
-			body: JSON.stringify({ email }),
+			body: JSON.stringify({ email, turnstileToken: turnstileToken ?? undefined }),
 		}),
 	/** Complete self-service registration with the emailed code. */
 	register: (payload: { email: string; code: string; password: string; name?: string }) =>

@@ -12,6 +12,8 @@ interface Props {
 	onChange: (next: string) => void;
 	onTitleChange: (next: string) => void;
 	onSave: () => void;
+	/** One-line save status for the header (「已自动保存 09:52:11」…). */
+	saveHint?: string | null;
 	readOnly?: boolean;
 }
 
@@ -170,6 +172,7 @@ export default function DrawioEditor({
 	onChange,
 	onTitleChange,
 	onSave,
+	saveHint,
 	readOnly = false,
 }: Props) {
 	const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -212,8 +215,26 @@ export default function DrawioEditor({
 				case 'autosave': {
 					const next = typeof msg.xml === 'string' ? msg.xml : null;
 					if (next && next !== latestXml.current) onChange(next);
-					// acknowledge, otherwise the embed keeps the "unsaved" state
-					post({ action: 'status', message: '', modified: false });
+					/**
+					 * Acknowledge with draw.io's own status popup.
+					 *
+					 * `save` is the user pressing 保存并退出 (or Ctrl+S inside the
+					 * frame); replying with an EMPTY message — which is what we
+					 * used to do for both events — shows nothing at all, so the
+					 * click looked dead ("点击好像并没有什么反应"). An explicit save now
+					 * pops 「已保存」 and persists immediately; the silent autosave
+					 * keeps the empty message and the normal debounced write.
+					 */
+					const explicit = msg.event === 'save';
+					post({ action: 'status', message: explicit ? '已保存' : '', modified: false });
+					if (explicit) onSave();
+					break;
+				}
+				case 'exit': {
+					// 保存并退出 in some builds fires `exit` after `save`; confirm so
+					// the frame clears its dirty marker. We stay on the page.
+					post({ action: 'status', message: '已保存', modified: false });
+					toast('已保存', 'success');
 					break;
 				}
 				case 'export': {
@@ -228,7 +249,7 @@ export default function DrawioEditor({
 
 		window.addEventListener('message', onMessage);
 		return () => window.removeEventListener('message', onMessage);
-	}, [onChange, post, title]);
+	}, [onChange, post, title, onSave]);
 
 	// Ctrl+S asks the embed for its current XML, then persists
 	useEffect(() => {
@@ -258,7 +279,9 @@ export default function DrawioEditor({
 						placeholder="未命名图表"
 						disabled={readOnly}
 					/>
-					<span className="save-state">{ready ? '已连接 draw.io' : '加载中…'}</span>
+					<span className={`save-state${saveHint === '保存失败，请重试' ? ' save-state--error' : ''}`}>
+						{!ready ? '加载中…' : (saveHint ?? '自动保存已开启')}
+					</span>
 				</div>
 				<div className="editor__right">
 					{/*

@@ -49,6 +49,7 @@ import MindNodeView, {
 	TOGGLE_COLLAPSE_EVENT,
 } from '../components/MindNodeView';
 import MindEdge, { EDGE_LABEL_EVENT, REMOVE_EDGE_EVENT } from '../components/MindEdge';
+import MindLogo from '../components/MindLogo';
 import ThemePicker from '../components/ThemePicker';
 import StructurePicker from '../components/StructurePicker';
 import { api, ApiError } from '../lib/api';
@@ -1395,6 +1396,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 
 						<div className="editor__divider" />
 
+						<MindLogo size={15} className="md-editor__badge" />
 						<input
 							className="editor__title"
 							value={title}

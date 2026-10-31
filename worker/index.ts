@@ -11,6 +11,16 @@ export interface Env {
 	RESEND_API_KEY?: string;
 	/** Verified sender, e.g. `MindFlow <noreply@mail.245556.xyz>`. */
 	MAIL_FROM?: string;
+	/**
+	 * Cloudflare Turnstile (人机验证).
+	 *
+	 * The captcha is enforced ONLY when both values are present, so local dev
+	 * keeps working without keys. Set the secret with
+	 *   wrangler secret put TURNSTILE_SECRET_KEY
+	 * and keep the public site key in wrangler.jsonc `vars`.
+	 */
+	TURNSTILE_SITE_KEY?: string;
+	TURNSTILE_SECRET_KEY?: string;
 	// Optional
 	PIXHOST_API?: string;
 }
@@ -233,6 +243,51 @@ const CODE_TTL_MS = 10 * 60 * 1000; // a code stays valid for 10 minutes
 const RESEND_COOLDOWN_MS = 60 * 1000; // one request per minute per address
 const MAX_ATTEMPTS = 5;
 
+/** Turnstile is mandatory as soon as both keys are configured. */
+function turnstileConfigured(env: Env): boolean {
+	return Boolean(env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET_KEY);
+}
+
+/**
+ * Exchange the browser token for a verdict at Cloudflare's siteverify API.
+ *
+ * Returns `null` when the request may proceed, or a Chinese error message when
+ * it must be refused. Two properties worth knowing:
+ *  - tokens are single-use: siteverify consumes the token, so every resend of
+ *    a code needs a freshly solved widget;
+ *  - this fails CLOSED when Cloudflare is unreachable — a broken captcha
+ *    check must not silently degrade into "no captcha", because the whole
+ *    point is protecting the Resend quota from email-bombing scripts.
+ */
+async function verifyTurnstile(env: Env, token: unknown, request: Request): Promise<string | null> {
+	if (!turnstileConfigured(env)) return null; // captcha off → nothing to check
+	if (typeof token !== 'string' || !token) return '请先完成人机验证';
+
+	try {
+		const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				secret: env.TURNSTILE_SECRET_KEY,
+				response: token,
+				remoteip: request.headers.get('CF-Connecting-IP') || undefined,
+			}),
+		});
+		const data = (await res.json().catch(() => null)) as {
+			success?: boolean;
+			'error-codes'?: string[];
+		} | null;
+		if (!data?.success) {
+			console.error('turnstile rejected:', data?.['error-codes']?.join(',') ?? `http ${res.status}`);
+			return '人机验证未通过，请重新完成验证后再点“获取验证码”';
+		}
+		return null;
+	} catch (e) {
+		console.error('turnstile unreachable:', e instanceof Error ? e.message : e);
+		return '人机验证服务暂时不可用，请稍后再试';
+	}
+}
+
 function normalizeEmail(raw: string): string {
 	return raw.trim().toLowerCase();
 }
@@ -325,13 +380,18 @@ async function sendVerifyEmail(
 }
 
 async function handleRequestCode(request: Request, env: Env): Promise<Response> {
-	const body = (await request.json().catch(() => null)) as { email?: string } | null;
+	const body = (await request.json().catch(() => null)) as { email?: string; turnstileToken?: string } | null;
 	if (!body?.email) return fail('请输入邮箱');
 
 	const email = normalizeEmail(body.email);
 	if (!QQ_DIGITS_RE.test(email)) {
 		return fail('只支持纯数字的 QQ 邮箱（如 123456789@qq.com）');
 	}
+
+	// Human check first: a bot never gets close to the email-sending path.
+	// The token is consumed here, even if the request is refused below.
+	const captchaError = await verifyTurnstile(env, body.turnstileToken, request);
+	if (captchaError) return fail(captchaError, 400);
 
 	// already registered?
 	const exists = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
@@ -703,6 +763,13 @@ async function route(request: Request, env: Env): Promise<Response> {
 	if (path === '/api/auth/login' && method === 'POST') return handleLogin(request, env);
 	if (path === '/api/auth/logout' && method === 'POST') return handleLogout(request);
 	if (path === '/api/auth/me' && method === 'GET') return handleMe(request, env);
+
+	// captcha configuration for the register page (the site key is public;
+	// the secret key never leaves the worker)
+	if (path === '/api/auth/captcha' && method === 'GET') {
+		const enabled = turnstileConfigured(env);
+		return json({ enabled, siteKey: enabled ? env.TURNSTILE_SITE_KEY : null });
+	}
 
 	// self-service registration (public)
 	if (path === '/api/auth/request-code' && method === 'POST') return handleRequestCode(request, env);

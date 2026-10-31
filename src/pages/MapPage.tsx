@@ -38,6 +38,17 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 	const latest = useRef({ title: '', markdown: '', drawioXml: '', kind: 'mind' as DocKind });
 	latest.current = { title, markdown, drawioXml, kind: kind ?? 'mind' };
 
+	/**
+	 * Visible save state for the md / drawio editors.
+	 *
+	 * Their autosave was completely silent, so users could not tell whether
+	 * anything was being stored ("没有地方显示自动保存"). The mind map editor
+	 * already has its own indicator; these two now share this one.
+	 */
+	type SaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
+	const [saveState, setSaveState] = useState<SaveState>('idle');
+	const [savedAt, setSavedAt] = useState<number | null>(null);
+
 	useEffect(() => {
 		let alive = true;
 		api
@@ -73,6 +84,9 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 	 *
 	 * Only md / drawio use this path — the mind map keeps its own editor-local
 	 * autosave, so passing it through here would duplicate the write.
+	 *
+	 * `immediate` (Ctrl+S / draw.io 保存按钮) writes now and confirms with a
+	 * toast; the debounced path just quietly stores after 900ms of idle.
 	 */
 	const persist = useCallback(
 		async (immediate = false) => {
@@ -88,9 +102,14 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 					...(snap.kind === 'md' ? { markdown: snap.markdown } : {}),
 					...(snap.kind === 'drawio' ? { drawioXml: snap.drawioXml } : {}),
 				};
+				setSaveState('saving');
 				try {
 					await api.updateMap(mapId, { title: snap.title, data: serializeDoc(doc) });
+					setSaveState('saved');
+					setSavedAt(Date.now());
+					if (immediate) toast('已保存', 'success');
 				} catch {
+					setSaveState('error');
 					toast('保存失败', 'error');
 				}
 			};
@@ -101,9 +120,18 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 		[mapId, readOnly],
 	);
 
+	/**
+	 * Edit handlers.
+	 *
+	 * They write the ref IMMEDIATELY (not just on re-render), so an explicit
+	 * save fired in the same event — e.g. draw.io's 保存并退出 → autosave
+	 * message → persist — never stores a stale value.
+	 */
 	const changeMarkdown = useCallback(
 		(next: string) => {
+			latest.current.markdown = next;
 			setMarkdown(next);
+			setSaveState('dirty');
 			void persist();
 		},
 		[persist],
@@ -111,7 +139,9 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 
 	const changeXml = useCallback(
 		(next: string) => {
+			latest.current.drawioXml = next;
 			setDrawioXml(next);
+			setSaveState('dirty');
 			void persist();
 		},
 		[persist],
@@ -119,11 +149,26 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 
 	const changeTitle = useCallback(
 		(next: string) => {
+			latest.current.title = next;
 			setTitle(next);
+			setSaveState('dirty');
 			void persist();
 		},
 		[persist],
 	);
+
+	/** One-line save indicator shared by the md / drawio editors. */
+	const saveHint = readOnly
+		? null
+		: saveState === 'saving'
+			? '正在保存…'
+			: saveState === 'saved' && savedAt
+				? `已自动保存 ${new Date(savedAt).toLocaleTimeString('zh-CN', { hour12: false })}`
+				: saveState === 'error'
+					? '保存失败，请重试'
+					: saveState === 'dirty'
+						? '有未保存的更改'
+						: null;
 
 	if (loading || !kind) {
 		return (
@@ -142,6 +187,7 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 					onChange={changeMarkdown}
 					onTitleChange={changeTitle}
 					onSave={() => void persist(true)}
+					saveHint={saveHint}
 					readOnly={readOnly}
 				/>
 				<Toaster />
@@ -158,6 +204,7 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 					onChange={changeXml}
 					onTitleChange={changeTitle}
 					onSave={() => void persist(true)}
+					saveHint={saveHint}
 					readOnly={readOnly}
 				/>
 				<Toaster />

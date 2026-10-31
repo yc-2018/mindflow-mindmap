@@ -314,6 +314,20 @@ select {
 	font-size: 11.5px;
 	color: var(--danger);
 }
+/* muted hint under a field (e.g. "finish the captcha first") */
+.field__hint {
+	display: block;
+	margin-top: 4px;
+	font-size: 11.5px;
+	color: var(--text-mute);
+}
+/* Cloudflare Turnstile placeholder (the widget renders an iframe inside) */
+.turnstile {
+	display: flex;
+	justify-content: center;
+	min-height: 65px;
+	margin: -2px 0 10px;
+}
 
 /* ---------- dashboard ---------- */
 
@@ -2659,4 +2673,10 @@ select {
 	width: 100%;
 	height: 100%;
 	display: block;
+}
+
+/* save-state variants for md / drawio headers */
+.save-state--error {
+	color: var(--red, #e5484d);
+	font-weight: 600;
 }
