@@ -53,6 +53,7 @@ import MindLogo from '../components/MindLogo';
 import AutoSaveToggle from '../components/AutoSaveToggle';
 import { getAutoSave, useAutoSave } from '../lib/autoSave';
 import { confirmLeave } from '../lib/leaveGuard';
+import { buildShareText } from '../lib/shareText';
 import ThemePicker from '../components/ThemePicker';
 import StructurePicker from '../components/StructurePicker';
 import { api, ApiError } from '../lib/api';
@@ -779,9 +780,8 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 				const { shareToken: token } = await api.setShare(mapId, enabled);
 				setShareToken(token);
 				if (enabled && token) {
-					const url = `${window.location.origin}/s/${token}`;
-					await navigator.clipboard.writeText(url).catch(() => undefined);
-					toast('分享链接已复制', 'success');
+					await navigator.clipboard.writeText(await buildShareText(title, token)).catch(() => undefined);
+					toast('分享文案已复制（名称 + 链接）', 'success');
 				} else {
 					toast('已关闭分享', 'success');
 				}
@@ -791,7 +791,7 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 				setShareBusy(false);
 			}
 		},
-		[mapId, shareBusy],
+		[mapId, shareBusy, title],
 	);
 
 	/**
@@ -807,28 +807,26 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			const { shareToken: token } = await api.resetShare(mapId);
 			setShareToken(token);
 			if (token) {
-				const url = `${window.location.origin}/s/${token}`;
-				await navigator.clipboard.writeText(url).catch(() => undefined);
-				toast('已生成新链接，旧链接已失效', 'success');
+				await navigator.clipboard.writeText(await buildShareText(title, token)).catch(() => undefined);
+				toast('已生成新链接并复制，旧链接已失效', 'success');
 			}
 		} catch {
 			toast('操作失败', 'error');
 		} finally {
 			setShareBusy(false);
 		}
-	}, [mapId, shareBusy]);
+	}, [mapId, shareBusy, title]);
 
-	/** Copy the current link again (the panel's "复制链接" button). */
+	/** Copy the current share blurb (name + title + link) again. */
 	const copyShareLink = useCallback(async () => {
 		if (!shareToken) return;
-		const url = `${window.location.origin}/s/${shareToken}`;
 		try {
-			await navigator.clipboard.writeText(url);
-			toast('分享链接已复制', 'success');
+			await navigator.clipboard.writeText(await buildShareText(title, shareToken));
+			toast('分享文案已复制', 'success');
 		} catch {
 			toast('复制失败，请手动选择链接', 'error');
 		}
-	}, [shareToken]);
+	}, [shareToken, title]);
 
 	// ---- structure switch ----
 	const changeStructure = useCallback(

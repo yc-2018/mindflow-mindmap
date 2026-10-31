@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { Copy, Link2, RefreshCw, Share2 } from 'lucide-react';
 
 import { api } from '../lib/api';
+import { buildShareText, shareUrl } from '../lib/shareText';
 import { toast } from '../lib/toast';
 
 interface Props {
@@ -26,14 +27,18 @@ export default function ShareControl({ mapId, title, initialToken = null, readOn
 	const [token, setToken] = useState<string | null>(initialToken);
 	const [busy, setBusy] = useState(false);
 
-	const copy = useCallback(async (value: string) => {
-		try {
-			await navigator.clipboard.writeText(value);
-			toast('分享链接已复制', 'success');
-		} catch {
-			toast('复制失败，请手动选择链接', 'error');
-		}
-	}, []);
+	/** Copy the full share blurb (name + 「title」 + link), not just the URL. */
+	const copyBlurb = useCallback(
+		async (value: string) => {
+			try {
+				await navigator.clipboard.writeText(await buildShareText(title, value));
+				toast('分享文案已复制（名称 + 链接）', 'success');
+			} catch {
+				toast('复制失败，请手动选择链接', 'error');
+			}
+		},
+		[title],
+	);
 
 	const toggle = useCallback(
 		async (enabled: boolean) => {
@@ -43,7 +48,7 @@ export default function ShareControl({ mapId, title, initialToken = null, readOn
 				const { shareToken } = await api.setShare(mapId, enabled);
 				setToken(shareToken);
 				if (enabled && shareToken) {
-					await copy(`${window.location.origin}/s/${shareToken}`);
+					await copyBlurb(shareToken);
 				} else {
 					toast('已关闭分享', 'success');
 				}
@@ -53,7 +58,7 @@ export default function ShareControl({ mapId, title, initialToken = null, readOn
 				setBusy(false);
 			}
 		},
-		[busy, copy, mapId],
+		[busy, copyBlurb, mapId],
 	);
 
 	const reset = useCallback(async () => {
@@ -63,15 +68,15 @@ export default function ShareControl({ mapId, title, initialToken = null, readOn
 			const { shareToken } = await api.resetShare(mapId);
 			setToken(shareToken);
 			if (shareToken) {
-				await copy(`${window.location.origin}/s/${shareToken}`);
-				toast('已生成新链接，旧链接已失效', 'success');
+				await copyBlurb(shareToken);
+				toast('已生成新链接并复制，旧链接已失效', 'success');
 			}
 		} catch {
 			toast('操作失败', 'error');
 		} finally {
 			setBusy(false);
 		}
-	}, [busy, copy, mapId]);
+	}, [busy, copyBlurb, mapId]);
 
 	if (readOnly) return null;
 
@@ -97,12 +102,13 @@ export default function ShareControl({ mapId, title, initialToken = null, readOn
 								<div className="share-row">
 									<input
 										readOnly
-										value={`${window.location.origin}/s/${token}`}
+										value={shareUrl(token)}
 										onFocus={(e) => e.currentTarget.select()}
 									/>
 									<button
 										className="btn-primary btn-icon-text"
-										onClick={() => void copy(`${window.location.origin}/s/${token}`)}
+										title="复制含名称的分享文案（粘贴给别人更好读）"
+										onClick={() => void copyBlurb(token)}
 									>
 										<Copy size={15} strokeWidth={1.9} />
 										复制

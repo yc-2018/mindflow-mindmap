@@ -26,6 +26,7 @@ import { api, ApiError, type MapSummary, type User } from '../lib/api';
 import { navigate } from '../lib/router';
 import { toast } from '../lib/toast';
 import { parseDoc, serializeDoc, starterDocOf, docKind, type MapDoc, type MindNode, type DocKind } from '../lib/types';
+import { buildShareText } from '../lib/shareText';
 import { layoutTree } from '../lib/layout';
 import { importDoc } from '../lib/import';
 import { uid } from '../lib/uid';
@@ -149,9 +150,12 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 			const updated = { ...m, shareToken };
 			setMaps((prev) => prev.map((x) => (x.id === m.id ? updated : x)));
 			setShareFor(updated);
-			const url = `${window.location.origin}/s/${shareToken}`;
-			await navigator.clipboard.writeText(url).catch(() => undefined);
-			toast('分享链接已复制', 'success');
+			if (shareToken) {
+				await navigator.clipboard
+					.writeText(await buildShareText(m.title, shareToken))
+					.catch(() => undefined);
+				toast('分享文案已复制（名称 + 链接）', 'success');
+			}
 		} catch {
 			toast('操作失败', 'error');
 		}
@@ -182,9 +186,10 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 			setMaps((prev) => prev.map((x) => (x.id === m.id ? updated : x)));
 			setShareFor(updated);
 			if (shareToken) {
-				const url = `${window.location.origin}/s/${shareToken}`;
-				await navigator.clipboard.writeText(url).catch(() => undefined);
-				toast('已生成新链接，旧链接已失效', 'success');
+				await navigator.clipboard
+					.writeText(await buildShareText(m.title, shareToken))
+					.catch(() => undefined);
+				toast('已生成新链接并复制，旧链接已失效', 'success');
 			}
 		} catch {
 			toast('操作失败', 'error');
@@ -621,9 +626,12 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 							/>
 							<button
 								className="btn-primary"
+								title="复制含名称的分享文案（粘贴给别人更好读）"
 								onClick={() => {
-									void navigator.clipboard.writeText(`${window.location.origin}/s/${shareFor.shareToken}`);
-									toast('已复制', 'success');
+									void buildShareText(shareFor.title, shareFor.shareToken!).then((text) =>
+										navigator.clipboard.writeText(text),
+									);
+									toast('分享文案已复制', 'success');
 								}}
 							>
 								复制
