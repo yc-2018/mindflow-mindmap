@@ -77,8 +77,12 @@ const BONE_TAN30 = 1 / Math.sqrt(3);
  * `lib/handles.ts` already flips the handles when a node sits behind its parent
  * (source-left / target-right), so by the time we get here the geometry is
  * always "leave on this side, arrive on that side" — no big loop is possible.
+ *
+ * Exported so the dashboard thumbnail can draw EXACTLY what the editor draws
+ * (it used to draw its own bezier curves, so fishbone cards showed a curly
+ * mind map instead of the fish — "缩略图和里面的图不一样").
  */
-function pickPath(args: {
+export function pickPath(args: {
 	sourceX: number;
 	sourceY: number;
 	targetX: number;

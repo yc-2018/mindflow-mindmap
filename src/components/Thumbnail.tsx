@@ -3,6 +3,9 @@ import { parseDoc, docKind, type MindNode } from '../lib/types';
 import MarkdownRenderer from './MarkdownRenderer';
 import { estimateHeight, NODE_WIDTH, pruneEdges, layoutTree, syncTones } from '../lib/layout';
 import { getStructure } from '../lib/structures';
+import { withAdaptiveHandles } from '../lib/handles';
+import { pickPath } from './MindEdge';
+import { Position } from '@xyflow/react';
 
 const PAD = 28;
 
@@ -99,7 +102,6 @@ function Thumbnail({ data }: Props) {
 		const pruned = pruneEdges(doc.nodes, doc.edges);
 		const toned = syncTones(doc.nodes, pruned);
 		const nodes = layoutTree(toned, pruned, getStructure(doc.structure));
-		const edges = pruned;
 
 		const boxes: Box[] = nodes.map((n) => ({ node: n, w: NODE_WIDTH, h: estimateHeight(n) }));
 
@@ -119,22 +121,65 @@ function Thumbnail({ data }: Props) {
 		const h = Math.max(1, maxY - minY);
 
 		const byId = new Map(boxes.map((b) => [b.node.id, b]));
-		const lines = edges
+
+		/**
+		 * Draw the connectors with the SAME code path as the editor: route the
+		 * handles first, then turn each routed edge into a path with pickPath.
+		 *
+		 * The thumbnail used to draw its own bezier (right edge -> left edge),
+		 * which ignores the fishbone's spine/bones/ribs entirely — a fishbone
+		 * card showed a curly generic mind map while the editor showed a fish
+		 * ("首页的缩略图和里面的图不太像"). With the shared router the thumbnail
+		 * now mirrors the editor line for line.
+		 */
+		const routed = withAdaptiveHandles(nodes, pruned, getStructure(doc.structure));
+		const paths = routed
 			.map((e) => {
 				const s = byId.get(e.source);
 				const t = byId.get(e.target);
 				if (!s || !t) return null;
-				return {
-					id: e.id,
-					x1: s.node.position.x + s.w,
-					y1: s.node.position.y + s.h / 2,
-					x2: t.node.position.x,
-					y2: t.node.position.y + t.h / 2,
+				const sourceHandleId = e.sourceHandle ?? undefined;
+				const targetHandleId = e.targetHandle ?? undefined;
+				// map handle ids onto the node-edge anchor points, exactly where
+				// React Flow would place them on the real handles
+				const anchor = (
+					box: Box,
+					handleId: string | undefined,
+					fallback: 'left' | 'right',
+				): { x: number; y: number; position: Position } => {
+					const cx = box.node.position.x + box.w / 2;
+					const cy = box.node.position.y + box.h / 2;
+					if (handleId?.endsWith('-bottom'))
+						return { x: cx, y: box.node.position.y + box.h, position: Position.Bottom };
+					if (handleId?.endsWith('-top'))
+						return { x: cx, y: box.node.position.y, position: Position.Top };
+					if (handleId?.endsWith('-left'))
+						return { x: box.node.position.x, y: cy, position: Position.Left };
+					return {
+						x: fallback === 'left' ? box.node.position.x : box.node.position.x + box.w,
+						y: cy,
+						position: fallback === 'left' ? Position.Left : Position.Right,
+					};
 				};
+				const a = anchor(s, sourceHandleId, 'right');
+				const b = anchor(t, targetHandleId, 'left');
+				const fish = (e.data as { fishbone?: 'bone' | 'rib' | null } | undefined)?.fishbone;
+				const { path } = pickPath({
+					sourceX: a.x,
+					sourceY: a.y,
+					sourcePosition: a.position,
+					sourceHandleId,
+					targetX: b.x,
+					targetY: b.y,
+					targetPosition: b.position,
+					targetHandleId,
+					fishbone: fish ?? null,
+				});
+				return { id: e.id, d: path };
 			})
-			.filter(Boolean) as { id: string; x1: number; y1: number; x2: number; y2: number }[];
+			.filter(Boolean) as { id: string; d: string }[];
 
-		return { boxes, lines, w, h, minX, minY };
+		return { boxes, paths, w, h, minX, minY };
 	}, [data]);
 
 	if (kind === 'md') {
@@ -179,18 +224,9 @@ function Thumbnail({ data }: Props) {
 				role="img"
 				aria-label="导图预览"
 			>
-				{model.lines.map((e) => {
-					const mx = (e.x1 + e.x2) / 2;
-					return (
-						<path
-							key={e.id}
-							d={`M${e.x1},${e.y1} C${mx},${e.y1} ${mx},${e.y2} ${e.x2},${e.y2}`}
-							stroke="#cbd5e1"
-							strokeWidth={2}
-							fill="none"
-						/>
-					);
-				})}
+				{model.paths.map((e) => (
+					<path key={e.id} d={e.d} stroke="#cbd5e1" strokeWidth={2} fill="none" />
+				))}
 
 				{model.boxes.map(({ node, w, h }) => {
 					const tone = node.data.tone ?? 'leaf';
