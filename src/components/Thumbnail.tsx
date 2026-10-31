@@ -52,39 +52,100 @@ function Thumbnail({ data }: Props) {
 	}, [data, kind]);
 
 	/**
-	 * draw.io diagrams preview with their real shape labels.
+	 * draw.io diagrams preview as a real miniature picture.
 	 *
-	 * The regex used to read `value="..."` from the raw XML and display it
-	 * verbatim — but a self-closing/edge cell can carry an XML-escaped payload,
-	 * and the card ended up looking like a dump of markup. Decoding entities and
-	 * dropping empty/edge cells fixes that; only vertex labels are shown.
+	 * The old version listed vertex labels as text chips, so every card looked
+	 * like the same stack of boxes — no geometry, and none of the edges the
+	 * diagram is actually made of ("缩略图没线的 全是方框的").
+	 *
+	 * This parses the mxGraphModel with a real XML parser and keeps, per cell:
+	 *  - vertices: geometry (x/y/w/h), the label, and the style's fill/stroke
+	 *  - edges: their source/target pair
+	 * which is then rendered as scaled rects + lines inside an SVG viewBox.
+	 *
+	 * Compressed `<diagram>` payloads (some imported `.drawio` files) cannot be
+	 * read synchronously here; those fall back to a hint instead of lying.
 	 */
-	const drawioPreview = useMemo(() => {
+	const drawioModel = useMemo(() => {
 		if (kind !== 'drawio') return null;
 		const doc = parseDoc(data);
 		const xml = doc.drawioXml ?? '';
+		if (!xml.includes('<mxCell')) return null;
 
-		const decode = (s: string) =>
-			s
-				.replace(/&lt;/g, '<')
-				.replace(/&gt;/g, '>')
-				.replace(/&quot;/g, '"')
-				.replace(/&#39;/g, "'")
-				.replace(/&amp;/g, '&');
+		try {
+			const parsed = new DOMParser().parseFromString(xml, 'application/xml');
+			const diagram = parsed.querySelector('diagram');
+			// compressed payloads hold base64 text, not mxGraphModel children
+			if (!diagram || diagram.querySelector('mxGraphModel') === null) return null;
 
-		const labels: string[] = [];
-		// only cells that are VERTICES (shapes), never edges
-		const re = /<mxCell[^>]*\bvertex="1"[^>]*\bvalue="([^"]*)"|<mxCell[^>]*\bvalue="([^"]*)"[^>]*\bvertex="1"/g;
-		let m: RegExpExecArray | null;
-		while ((m = re.exec(xml)) && labels.length < 6) {
-			const raw = m[1] ?? m[2] ?? '';
-			const v = decode(raw)
-				.replace(/<[^>]+>/g, ' ')
-				.replace(/\s+/g, ' ')
-				.trim();
-			if (v && !v.startsWith('<')) labels.push(v);
+			const strip = (s: string) =>
+				s
+					.replace(/<[^>]+>/g, ' ')
+					.replace(/&lt;/g, '<')
+					.replace(/&gt;/g, '>')
+					.replace(/&quot;/g, '"')
+					.replace(/&#39;/g, "'")
+					.replace(/&amp;/g, '&')
+					.replace(/\s+/g, ' ')
+					.trim();
+
+			const styleColor = (style: string, key: string, fallback: string) => {
+				const m = new RegExp(`${key}=([^;]+)`).exec(style);
+				const v = m?.[1];
+				return v && v !== 'none' && v !== 'default' ? v : fallback;
+			};
+
+			type Shape = { id: string; x: number; y: number; w: number; h: number; label: string; fill: string; stroke: string; rounded: boolean };
+			const shapes: Shape[] = [];
+			const lines: { from: string; to: string }[] = [];
+
+			for (const cell of Array.from(parsed.querySelectorAll('mxCell'))) {
+				if (shapes.length >= 60 || lines.length >= 120) break;
+				const id = cell.getAttribute('id') ?? '';
+				if (cell.getAttribute('vertex') === '1') {
+					const geo = cell.querySelector('mxGeometry');
+					if (!geo) continue;
+					const x = Number(geo.getAttribute('x'));
+					const y = Number(geo.getAttribute('y'));
+					const w = Number(geo.getAttribute('width'));
+					const h = Number(geo.getAttribute('height'));
+					if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) continue;
+					const style = cell.getAttribute('style') ?? '';
+					shapes.push({
+						id,
+						x,
+						y,
+						w,
+						h,
+						label: strip(cell.getAttribute('value') ?? ''),
+						fill: styleColor(style, 'fillColor', '#ffffff'),
+						stroke: styleColor(style, 'strokeColor', '#94a3b8'),
+						rounded: /rounded=1/.test(style),
+					});
+				} else if (cell.getAttribute('edge') === '1') {
+					const from = cell.getAttribute('source');
+					const to = cell.getAttribute('target');
+					if (from && to) lines.push({ from, to });
+				}
+			}
+
+			if (!shapes.length) return null;
+
+			// viewBox spanning every shape, with breathing room
+			const minX = Math.min(...shapes.map((s) => s.x));
+			const minY = Math.min(...shapes.map((s) => s.y));
+			const maxX = Math.max(...shapes.map((s) => s.x + s.w));
+			const maxY = Math.max(...shapes.map((s) => s.y + s.h));
+			const pad = 24;
+
+			return {
+				shapes,
+				lines,
+				viewBox: `${minX - pad} ${minY - pad} ${maxX - minX + pad * 2} ${maxY - minY + pad * 2}`,
+			};
+		} catch {
+			return null;
 		}
-		return labels;
 	}, [data, kind]);
 
 	const model = useMemo(() => {
@@ -193,14 +254,70 @@ function Thumbnail({ data }: Props) {
 	}
 
 	if (kind === 'drawio') {
+		if (!drawioModel) {
+			return (
+				<div className="thumb thumb--text">
+					<span className="thumb__empty-note">暂无预览</span>
+				</div>
+			);
+		}
+
+		const byId = new Map(drawioModel.shapes.map((s) => [s.id, s]));
+		const center = (s: (typeof drawioModel.shapes)[number]) => ({ x: s.x + s.w / 2, y: s.y + s.h / 2 });
+
 		return (
-			<div className="thumb thumb--text">
-				{(drawioPreview ?? []).map((label, i) => (
-					<span key={i} className={`thumb__line thumb__chip${i === 0 ? ' thumb__chip--first' : ''}`}>
-						{label}
-					</span>
-				))}
-				{(drawioPreview ?? []).length === 0 ? <span className="thumb__empty-note">空白图表</span> : null}
+			<div className="thumb thumb--drawio">
+				<svg viewBox={drawioModel.viewBox} preserveAspectRatio="xMidYMid meet" role="img" aria-label="图表预览">
+					{/* edges first so the shapes sit on top of the line ends */}
+					{drawioModel.lines.map((l, i) => {
+						const a = byId.get(l.from);
+						const b = byId.get(l.to);
+						if (!a || !b) return null;
+						const p1 = center(a);
+						const p2 = center(b);
+						return (
+							<line
+								key={`l${i}`}
+								x1={p1.x}
+								y1={p1.y}
+								x2={p2.x}
+								y2={p2.y}
+								stroke="#b3c0d4"
+								strokeWidth={Math.max(2, Math.min(a.w, a.h) * 0.04)}
+							/>
+						);
+					})}
+					{drawioModel.shapes.map((s) => {
+						const fs = Math.min(15, Math.max(8, s.h * 0.32));
+						const maxChars = Math.max(2, Math.floor(s.w / (fs * 0.75)));
+						return (
+							<g key={s.id}>
+								<rect
+									x={s.x}
+									y={s.y}
+									width={s.w}
+									height={s.h}
+									rx={s.rounded ? Math.min(14, s.h * 0.3) : 2}
+									fill={s.fill}
+									stroke={s.stroke}
+									strokeWidth={Math.max(1.5, s.h * 0.03)}
+								/>
+								{s.label ? (
+									<text
+										x={s.x + s.w / 2}
+										y={s.y + s.h / 2}
+										textAnchor="middle"
+										dominantBaseline="central"
+										fontSize={fs}
+										fill="#1f2937"
+									>
+										{s.label.length > maxChars ? `${s.label.slice(0, maxChars)}…` : s.label}
+									</text>
+								) : null}
+							</g>
+						);
+					})}
+				</svg>
 			</div>
 		);
 	}

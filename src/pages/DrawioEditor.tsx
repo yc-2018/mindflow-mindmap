@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronLeft, Download, PenLine } from 'lucide-react';
+import { ChevronLeft, Download } from 'lucide-react';
+
+import DrawioLogo from '../components/DrawioLogo';
 
 import { navigate } from '../lib/router';
 import { toast } from '../lib/toast';
@@ -248,7 +250,7 @@ export default function DrawioEditor({
 					<button className="icon-btn" onClick={() => navigate('/')} title="返回首页">
 						<ChevronLeft size={17} strokeWidth={2} />
 					</button>
-					<PenLine size={15} strokeWidth={1.9} className="md-editor__badge" />
+					<DrawioLogo size={15} className="md-editor__badge" />
 					<input
 						className="editor__title"
 						value={title}

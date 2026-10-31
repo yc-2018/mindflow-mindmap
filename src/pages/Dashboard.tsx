@@ -10,7 +10,6 @@ import {
 	LogOut,
 	Map as MapIcon,
 	Network,
-	PenLine,
 	Pencil,
 	Plus,
 	RefreshCw,
@@ -23,6 +22,7 @@ import {
 import '@xyflow/react/dist/style.css';
 
 import Thumbnail from '../components/Thumbnail';
+import DrawioLogo from '../components/DrawioLogo';
 import { Logo } from '../components/Logo';
 import { api, ApiError, type MapSummary, type User } from '../lib/api';
 import { navigate } from '../lib/router';
@@ -73,6 +73,13 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 	const [shareFor, setShareFor] = useState<MapSummary | null>(null);
 	const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
 	const [sort, setSort] = useState<'updated' | 'created' | 'title'>('updated');
+	/**
+	 * Kind filter for the grid.
+	 *
+	 * Documents now come in three kinds, so the dashboard offers a category bar
+	 * to view one kind at a time (the reported "首页加上一个分类查看按钮").
+	 */
+	const [kindFilter, setKindFilter] = useState<'all' | DocKind>('all');
 	const [query, setQuery] = useState('');
 	const [importing, setImporting] = useState(false);
 	const [newMenuOpen, setNewMenuOpen] = useState(false);
@@ -305,15 +312,25 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 		[importing],
 	);
 
+	/** Which kind a summary row holds (defaults to mind for old documents). */
+	const kindOf = useCallback((m: MapSummary): DocKind => docKind(parseDoc(m.data)), []);
+
+	const counts = useMemo(() => {
+		const c = { all: maps.length, mind: 0, md: 0, drawio: 0 };
+		for (const m of maps) c[kindOf(m)]++;
+		return c;
+	}, [maps, kindOf]);
+
 	const visible = useMemo(() => {
 		const q = query.trim().toLowerCase();
-		const list = q ? maps.filter((m) => m.title.toLowerCase().includes(q)) : maps;
+		let list = q ? maps.filter((m) => m.title.toLowerCase().includes(q)) : maps;
+		if (kindFilter !== 'all') list = list.filter((m) => kindOf(m) === kindFilter);
 		return [...list].sort((a, b) => {
 			if (sort === 'title') return a.title.localeCompare(b.title, 'zh-CN');
 			if (sort === 'created') return b.createdAt - a.createdAt;
 			return b.updatedAt - a.updatedAt;
 		});
-	}, [maps, sort, query]);
+	}, [maps, sort, query, kindFilter, kindOf]);
 
 	return (
 		<div className="dash">
@@ -379,7 +396,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 									</span>
 								</button>
 								<button className="new-menu__item" onClick={() => void createMap('drawio')}>
-									<PenLine size={15} strokeWidth={1.9} />
+									<DrawioLogo size={15} />
 									<span>
 										<b>draw.io 图表</b>
 										<small>嵌入官方编辑器</small>
@@ -436,6 +453,40 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 					) : null}
 				</div>
 
+				{/* Category bar: view one document kind at a time. Counts come
+				    from the actual list, so a category with 0 files reads empty
+				    rather than being hidden — the user asked for a 分类查看按钮. */}
+				{!loading && maps.length ? (
+					<div className="kindbar">
+						<button
+							className={`kindbar__chip${kindFilter === 'all' ? ' is-active' : ''}`}
+							onClick={() => setKindFilter('all')}
+						>
+							全部 <span className="kindbar__count">{counts.all}</span>
+						</button>
+						<button
+							className={`kindbar__chip${kindFilter === 'mind' ? ' is-active' : ''}`}
+							onClick={() => setKindFilter('mind')}
+						>
+							<Network size={13} strokeWidth={2} /> 思维导图{' '}
+							<span className="kindbar__count">{counts.mind}</span>
+						</button>
+						<button
+							className={`kindbar__chip${kindFilter === 'md' ? ' is-active' : ''}`}
+							onClick={() => setKindFilter('md')}
+						>
+							<FileText size={13} strokeWidth={2} /> Markdown{' '}
+							<span className="kindbar__count">{counts.md}</span>
+						</button>
+						<button
+							className={`kindbar__chip${kindFilter === 'drawio' ? ' is-active' : ''}`}
+							onClick={() => setKindFilter('drawio')}
+						>
+							<DrawioLogo size={13} /> draw.io <span className="kindbar__count">{counts.drawio}</span>
+						</button>
+					</div>
+				) : null}
+
 				{loading ? (
 					<div className="dash__empty">
 						<div className="spinner" />
@@ -453,7 +504,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 					</div>
 				) : visible.length === 0 ? (
 					<div className="dash__empty">
-						<p>没有匹配「{query}」的导图。</p>
+						<p>
+							{query.trim() ? `没有匹配「${query}」的文件。` : '该分类下还没有文件，换个分类看看或新建一个。'}
+						</p>
 					</div>
 				) : (
 					<div className="grid">
@@ -523,8 +576,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 											const k = docKind(parseDoc(m.data));
 											if (k === 'md')
 												return <FileText size={14} strokeWidth={1.9} className="card__icon card__icon--md" />;
-											if (k === 'drawio')
-												return <PenLine size={14} strokeWidth={1.9} className="card__icon card__icon--drawio" />;
+											if (k === 'drawio') return <DrawioLogo size={14} className="card__icon" />;
 											return <Network size={14} strokeWidth={1.9} className="card__icon card__icon--mind" />;
 										})()}
 										<span className="card__title" title={m.title}>
