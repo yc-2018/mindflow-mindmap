@@ -324,9 +324,50 @@ select {
 /* Cloudflare Turnstile placeholder (the widget renders an iframe inside) */
 .turnstile {
 	display: flex;
-	justify-content: center;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
 	min-height: 65px;
 	margin: -2px 0 10px;
+}
+/* manual fallback after repeated silent challenge failures */
+.turnstile__retry {
+	font-size: 12px;
+	padding: 6px 12px;
+}
+/* QQ-number input with a fixed "@qq.com" suffix (the domain is never typed) */
+.qqinput {
+	display: flex;
+	align-items: stretch;
+	border: 1px solid var(--line-strong);
+	border-radius: 9px;
+	background: #fff;
+	transition: border-color 0.15s ease, box-shadow 0.15s ease;
+	cursor: text;
+}
+.qqinput:focus-within {
+	border-color: var(--brand);
+	box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.14);
+}
+.qqinput input {
+	flex: 1;
+	min-width: 0;
+}
+/* undo the generic .field input frame so the group owns the border */
+.field .qqinput input,
+.field .qqinput input:focus {
+	border: none;
+	border-radius: 9px;
+	box-shadow: none;
+	background: transparent;
+}
+.qqinput__suffix {
+	display: flex;
+	align-items: center;
+	padding-right: 12px;
+	font-size: 13px;
+	color: var(--text-dim);
+	user-select: none;
 }
 
 /* ---------- dashboard ---------- */

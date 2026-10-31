@@ -234,10 +234,10 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
 /**
  * The ONLY addresses allowed to self-register.
  *
- * The product rule is "a QQ mailbox whose local part is all digits", e.g.
+ * The product rule is "a QQ mailbox whose number is 5-10 digits", e.g.
  * 123456789@qq.com. Anything else (foxmail.com, letters, dots) is rejected.
  */
-const QQ_DIGITS_RE = /^\d{5,12}@qq\.com$/;
+const QQ_DIGITS_RE = /^\d{5,10}@qq\.com$/;
 
 const CODE_TTL_MS = 10 * 60 * 1000; // a code stays valid for 10 minutes
 const RESEND_COOLDOWN_MS = 60 * 1000; // one request per minute per address
@@ -385,7 +385,7 @@ async function handleRequestCode(request: Request, env: Env): Promise<Response> 
 
 	const email = normalizeEmail(body.email);
 	if (!QQ_DIGITS_RE.test(email)) {
-		return fail('只支持纯数字的 QQ 邮箱（如 123456789@qq.com）');
+		return fail('QQ 号需为 5-10 位数字（登录邮箱为 QQ号@qq.com）');
 	}
 
 	// Human check first: a bot never gets close to the email-sending path.
@@ -453,7 +453,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
 
 	const email = normalizeEmail(body.email);
 	if (!QQ_DIGITS_RE.test(email)) {
-		return fail('只支持纯数字的 QQ 邮箱（如 123456789@qq.com）');
+		return fail('QQ 号需为 5-10 位数字（登录邮箱为 QQ号@qq.com）');
 	}
 	if (body.password.length < 6) return fail('密码至少 6 位');
 

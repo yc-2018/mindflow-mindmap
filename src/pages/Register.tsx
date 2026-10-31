@@ -12,14 +12,17 @@ interface RegisterProps {
 /**
  * Self-service registration.
  *
- * The product rule is deliberately narrow: only a QQ mailbox whose local part is
- * all digits (123456789@qq.com) may register. The server enforces it too — the
- * check here only saves a round trip.
+ * The product rule is deliberately narrow: only a QQ mailbox whose number is
+ * 5-10 digits (123456789@qq.com) may register. The server enforces it too —
+ * the check here only saves a round trip.
+ *
+ * The form asks for the QQ number only; `@qq.com` is a fixed visual suffix, so
+ * the full address is assembled in `qqEmail` before it hits the API.
  */
-const QQ_DIGITS_RE = /^\d{5,12}@qq\.com$/;
+const QQ_NUM_RE = /^\d{5,10}$/;
 
 export default function Register({ onSuccess }: RegisterProps) {
-	const [email, setEmail] = useState('');
+	const [qqNum, setQqNum] = useState('');
 	const [code, setCode] = useState('');
 	const [password, setPassword] = useState('');
 	const [name, setName] = useState('');
@@ -32,7 +35,8 @@ export default function Register({ onSuccess }: RegisterProps) {
 	const [captchaToken, setCaptchaToken] = useState<string | null>(null);
 	const [captchaReset, setCaptchaReset] = useState(0);
 
-	const emailOk = QQ_DIGITS_RE.test(email.trim().toLowerCase());
+	const qqEmail = qqNum ? `${qqNum}@qq.com` : '';
+	const emailOk = QQ_NUM_RE.test(qqNum);
 	const captchaRequired = captcha?.enabled === true;
 	const captchaPending = captchaRequired && !captchaToken;
 
@@ -51,7 +55,7 @@ export default function Register({ onSuccess }: RegisterProps) {
 	const requestCode = useCallback(async () => {
 		if (sending) return;
 		if (!emailOk) {
-			setError('只支持纯数字的 QQ 邮箱（如 123456789@qq.com）');
+			setError('QQ 号需为 5-10 位数字');
 			return;
 		}
 		if (captchaRequired && !captchaToken) {
@@ -61,7 +65,7 @@ export default function Register({ onSuccess }: RegisterProps) {
 		setSending(true);
 		setError(null);
 		try {
-			await api.requestCode(email.trim(), captchaToken);
+			await api.requestCode(qqEmail, captchaToken);
 			setSent(true);
 			toast('验证码已发送，请查收邮件', 'success');
 		} catch (err) {
@@ -75,21 +79,21 @@ export default function Register({ onSuccess }: RegisterProps) {
 				setCaptchaReset((n) => n + 1);
 			}
 		}
-	}, [email, emailOk, sending, captchaRequired, captchaToken]);
+	}, [qqEmail, emailOk, sending, captchaRequired, captchaToken]);
 
 	const submit = useCallback(
 		async (e: React.FormEvent) => {
 			e.preventDefault();
 			if (busy) return;
 			if (!emailOk) {
-				setError('只支持纯数字的 QQ 邮箱（如 123456789@qq.com）');
+				setError('QQ 号需为 5-10 位数字');
 				return;
 			}
 			setBusy(true);
 			setError(null);
 			try {
 				const { user } = await api.register({
-					email: email.trim(),
+					email: qqEmail,
 					code: code.trim(),
 					password,
 					name: name.trim() || undefined,
@@ -102,7 +106,7 @@ export default function Register({ onSuccess }: RegisterProps) {
 				setBusy(false);
 			}
 		},
-		[email, emailOk, code, password, name, busy, onSuccess],
+		[qqEmail, emailOk, code, password, name, busy, onSuccess],
 	);
 
 	return (
@@ -117,16 +121,20 @@ export default function Register({ onSuccess }: RegisterProps) {
 
 				<label className="field">
 					<span>QQ 邮箱</span>
-					<input
-						type="email"
-						autoComplete="username"
-						value={email}
-						onChange={(e) => setEmail(e.target.value)}
-						placeholder="123456789@qq.com"
-						required
-					/>
-					{email && !emailOk ? (
-						<small className="field__warn">只支持纯数字的 @qq.com 邮箱</small>
+					<div className="qqinput">
+						<input
+							type="text"
+							inputMode="numeric"
+							autoComplete="username"
+							value={qqNum}
+							onChange={(e) => setQqNum(e.target.value.replace(/\D/g, '').slice(0, 10))}
+							placeholder="123456789"
+							required
+						/>
+						<span className="qqinput__suffix">@qq.com</span>
+					</div>
+					{qqNum && !emailOk ? (
+						<small className="field__warn">QQ 号需为 5-10 位数字</small>
 					) : null}
 				</label>
 
