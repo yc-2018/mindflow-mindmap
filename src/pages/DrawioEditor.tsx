@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronLeft, Download } from 'lucide-react';
 
 import DrawioLogo from '../components/DrawioLogo';
-
+import AutoSaveToggle from '../components/AutoSaveToggle';
+import { confirmLeave } from '../lib/leaveGuard';
 import { navigate } from '../lib/router';
 import { toast } from '../lib/toast';
 
@@ -14,6 +15,8 @@ interface Props {
 	onSave: () => void;
 	/** One-line save status for the header (「已自动保存 09:52:11」…). */
 	saveHint?: string | null;
+	/** Unsaved flag: drives the 保存 button and the leave prompt. */
+	dirty?: boolean;
 	readOnly?: boolean;
 }
 
@@ -173,6 +176,7 @@ export default function DrawioEditor({
 	onTitleChange,
 	onSave,
 	saveHint,
+	dirty = false,
 	readOnly = false,
 }: Props) {
 	const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -268,7 +272,14 @@ export default function DrawioEditor({
 		<div className="drawio-editor">
 			<header className="editor__bar">
 				<div className="editor__left">
-					<button className="icon-btn" onClick={() => navigate('/')} title="返回首页">
+					<button
+						className="icon-btn"
+						onClick={() => {
+							if (!confirmLeave(dirty)) return;
+							navigate('/');
+						}}
+						title="返回首页"
+					>
 						<ChevronLeft size={17} strokeWidth={2} />
 					</button>
 					<DrawioLogo size={15} className="md-editor__badge" />
@@ -284,6 +295,7 @@ export default function DrawioEditor({
 					</span>
 				</div>
 				<div className="editor__right">
+					{readOnly ? null : <AutoSaveToggle dirty={dirty} onSave={onSave} />}
 					{/*
 					  The panel toggles are draw.io's own menubar buttons (形状 / 格式),
 					  restyled by `installToggleStyles` to look like switches. We do NOT

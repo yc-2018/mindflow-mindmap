@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, Download, Eye, FileText, List, PenLine, SquareSplitHorizontal } from 'lucide-react';
 
 import MarkdownRenderer from '../components/MarkdownRenderer';
+import AutoSaveToggle from '../components/AutoSaveToggle';
+import { confirmLeave } from '../lib/leaveGuard';
 import { useTheme } from '../lib/themeContext';
 import { navigate } from '../lib/router';
 import { toast } from '../lib/toast';
@@ -15,6 +17,8 @@ interface Props {
 	onSave: () => void;
 	/** One-line save status for the header (「已自动保存 10:02:33」…). */
 	saveHint?: string | null;
+	/** Unsaved flag: drives the 保存 button and the leave prompt. */
+	dirty?: boolean;
 	readOnly?: boolean;
 }
 
@@ -64,6 +68,7 @@ export default function MarkdownEditor({
 	onTitleChange,
 	onSave,
 	saveHint,
+	dirty = false,
 	readOnly = false,
 }: Props) {
 	const theme = useTheme();
@@ -137,7 +142,14 @@ export default function MarkdownEditor({
 		<div className="md-editor">
 			<header className="editor__bar">
 				<div className="editor__left">
-					<button className="icon-btn" onClick={() => navigate('/')} title="返回首页">
+					<button
+						className="icon-btn"
+						onClick={() => {
+							if (!confirmLeave(dirty)) return;
+							navigate('/');
+						}}
+						title="返回首页"
+					>
 						<ChevronLeft size={17} strokeWidth={2} />
 					</button>
 					<FileText size={15} strokeWidth={1.9} className="md-editor__badge" />
@@ -158,6 +170,8 @@ export default function MarkdownEditor({
 					) : null}
 				</div>
 				<div className="editor__right">
+					{readOnly ? null : <AutoSaveToggle dirty={dirty} onSave={onSave} />}
+
 					{/* view mode: three explicit choices, not a single toggle */}
 					<div className="md-viewtabs">
 						<button

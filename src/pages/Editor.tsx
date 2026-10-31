@@ -50,6 +50,9 @@ import MindNodeView, {
 } from '../components/MindNodeView';
 import MindEdge, { EDGE_LABEL_EVENT, REMOVE_EDGE_EVENT } from '../components/MindEdge';
 import MindLogo from '../components/MindLogo';
+import AutoSaveToggle from '../components/AutoSaveToggle';
+import { getAutoSave, useAutoSave } from '../lib/autoSave';
+import { confirmLeave } from '../lib/leaveGuard';
 import ThemePicker from '../components/ThemePicker';
 import StructurePicker from '../components/StructurePicker';
 import { api, ApiError } from '../lib/api';
@@ -115,6 +118,11 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
 	const [dirty, setDirty] = useState(false);
+	/** Auto-save preference (shared across editors, on by default). */
+	const autoSave = useAutoSave();
+	// ref for listeners (beforeunload, flush-on-enable) that must not go stale
+	const dirtyRef = useRef(false);
+	dirtyRef.current = dirty;
 	const [lightbox, setLightbox] = useState<LightboxState | null>(null);
 	const [lightboxLoaded, setLightboxLoaded] = useState(false);
 	const [fullscreen, setFullscreen] = useState(false);
@@ -268,9 +276,21 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 
 	const markDirty = useCallback(() => {
 		setDirty(true);
-		persist();
+		// manual mode (switch off in the header): the change stays in memory and
+		// is only written by the 保存 button / Ctrl+S
+		if (getAutoSave()) persist();
 	}, [persist]);
 	markDirtyRef.current = markDirty;
+
+	/**
+	 * Turning auto-save back on flushes whatever accumulated in manual mode.
+	 * The effect re-runs only when the switch flips, and `persist` coalesces
+	 * through its own debounce, so a single write happens.
+	 */
+	useEffect(() => {
+		if (autoSave && dirtyRef.current) persist();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [autoSave]);
 
 	useEffect(() => {
 		const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -1371,7 +1391,15 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 			>
 				<header className="editor__bar">
 					<div className="editor__left">
-						<button className="icon-btn" onClick={() => navigate('/')} title="返回列表">
+						<button
+							className="icon-btn"
+							onClick={() => {
+								// SPA route change never fires beforeunload — ask once here
+								if (!confirmLeave(dirty)) return;
+								navigate('/');
+							}}
+							title="返回列表"
+						>
 							<ChevronLeft size={18} strokeWidth={2} />
 						</button>
 
@@ -1412,6 +1440,8 @@ function EditorInner({ mapId, readOnly = false }: EditorProps) {
 					</div>
 
 					<div className="editor__right">
+						{readOnly ? null : <AutoSaveToggle dirty={dirty} onSave={() => void persist(true)} />}
+
 						{uploadingCount > 0 ? (
 							<span className="editor__uploading">
 								<span className="spin-ring" />

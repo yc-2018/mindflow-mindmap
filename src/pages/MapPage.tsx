@@ -5,6 +5,8 @@ import Editor from './Editor';
 import MarkdownEditor from './MarkdownEditor';
 import DrawioEditor from './DrawioEditor';
 import { api, ApiError } from '../lib/api';
+import { getAutoSave, useAutoSave } from '../lib/autoSave';
+import { useUnsavedGuard } from '../lib/leaveGuard';
 import { parseDoc, serializeDoc, docKind, type DocKind } from '../lib/types';
 import { navigate } from '../lib/router';
 import { toast } from '../lib/toast';
@@ -126,13 +128,16 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 	 * They write the ref IMMEDIATELY (not just on re-render), so an explicit
 	 * save fired in the same event — e.g. draw.io's 保存并退出 → autosave
 	 * message → persist — never stores a stale value.
+	 *
+	 * With auto-save switched off the change still marks the document dirty,
+	 * but nothing is scheduled; only the 保存 button / Ctrl+S writes.
 	 */
 	const changeMarkdown = useCallback(
 		(next: string) => {
 			latest.current.markdown = next;
 			setMarkdown(next);
 			setSaveState('dirty');
-			void persist();
+			if (getAutoSave()) void persist();
 		},
 		[persist],
 	);
@@ -142,7 +147,13 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 			latest.current.drawioXml = next;
 			setDrawioXml(next);
 			setSaveState('dirty');
-			void persist();
+			/**
+			 * draw.io's own autosave messages land HERE constantly while typing;
+			 * they must not resurrect a save that the user deliberately turned
+			 * off — hence the same gate. An EXPLICIT draw.io 保存事件 (the save
+			 * message kind) still comes through DrawioEditor's onSave.
+			 */
+			if (getAutoSave()) void persist();
 		},
 		[persist],
 	);
@@ -152,10 +163,27 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 			latest.current.title = next;
 			setTitle(next);
 			setSaveState('dirty');
-			void persist();
+			if (getAutoSave()) void persist();
 		},
 		[persist],
 	);
+
+	const autoSave = useAutoSave();
+	const saveStateRef = useRef(saveState);
+	saveStateRef.current = saveState;
+
+	/** Re-enabling auto-save flushes whatever manual mode left pending. */
+	useEffect(() => {
+		if (autoSave && (saveStateRef.current === 'dirty' || saveStateRef.current === 'error')) persist();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [autoSave]);
+
+	/** Browser close/reload with unsaved changes → the native "leave once" prompt. */
+	const unsavedRef = useRef(false);
+	unsavedRef.current = saveState === 'dirty' || saveState === 'error' || saveState === 'saving';
+	useUnsavedGuard(unsavedRef);
+
+	const dirty = saveState === 'dirty' || saveState === 'error';
 
 	/** One-line save indicator shared by the md / drawio editors. */
 	const saveHint = readOnly
@@ -163,12 +191,14 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 		: saveState === 'saving'
 			? '正在保存…'
 			: saveState === 'saved' && savedAt
-				? `已自动保存 ${new Date(savedAt).toLocaleTimeString('zh-CN', { hour12: false })}`
+				? `${autoSave ? '已自动保存' : '已保存'} ${new Date(savedAt).toLocaleTimeString('zh-CN', { hour12: false })}`
 				: saveState === 'error'
 					? '保存失败，请重试'
 					: saveState === 'dirty'
 						? '有未保存的更改'
-						: null;
+						: autoSave
+							? null
+							: '手动保存模式';
 
 	if (loading || !kind) {
 		return (
@@ -188,6 +218,7 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 					onTitleChange={changeTitle}
 					onSave={() => void persist(true)}
 					saveHint={saveHint}
+					dirty={dirty}
 					readOnly={readOnly}
 				/>
 				<Toaster />
@@ -205,6 +236,7 @@ export default function MapPage({ mapId, readOnly = false }: Props) {
 					onTitleChange={changeTitle}
 					onSave={() => void persist(true)}
 					saveHint={saveHint}
+					dirty={dirty}
 					readOnly={readOnly}
 				/>
 				<Toaster />

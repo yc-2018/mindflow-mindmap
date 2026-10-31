@@ -2721,3 +2721,57 @@ select {
 	color: var(--red, #e5484d);
 	font-weight: 600;
 }
+
+/* ---------- header auto-save switch (+ manual save button) ---------- */
+
+.autosave {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding-right: 4px;
+}
+.autosave__switch {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 26px;
+	padding: 0 9px;
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	background: var(--surface-2, #f4f6f8);
+	color: var(--text-mute);
+	font-size: 12px;
+	cursor: pointer;
+	transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.autosave__switch:hover:not(:disabled) {
+	border-color: var(--brand);
+}
+.autosave__switch.is-on {
+	background: rgba(52, 196, 139, 0.12);
+	border-color: rgba(47, 174, 122, 0.45);
+	color: #15803d;
+	font-weight: 600;
+}
+.autosave__knob {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: #94a3b8;
+	flex: 0 0 auto;
+}
+.autosave__switch.is-on .autosave__knob {
+	background: #22c55e;
+	box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+}
+.autosave__save {
+	height: 28px;
+	padding: 0 12px !important;
+	font-size: 12.5px !important;
+}
+.autosave__save.is-need {
+	background: var(--brand);
+	color: #fff;
+	border-color: var(--brand);
+	font-weight: 600;
+}
